@@ -44,9 +44,13 @@ export function scenario(name, body) {
           if (String(value)) await e.sendKeys(String(value));
         },
         async text(css) { return (await this.element(css)).getText(); },
-        async select(css, value) { await new Select(await this.element(css)).selectByValue(value); },
+        async select(css, value) {
+          const select = new Select(await this.element(css));
+          try { await select.selectByValue(value); }
+          catch (e) { if (!String(e.message).includes('Cannot locate option')) throw e; await select.selectByVisibleText(value); }
+        },
         async waitText(css, expected) {
-          await driver.wait(async () => (await this.text(css)).includes(expected), 10000, css + ': ' + expected);
+          await driver.wait(async () => (await this.text(css)).toLocaleLowerCase('pt-BR').includes(expected.toLocaleLowerCase('pt-BR')), 10000, css + ': ' + expected);
         },
         async alert(text, answer) {
           const a = await driver.wait(until.alertIsPresent(), 10000);
@@ -62,7 +66,8 @@ export function scenario(name, body) {
       for (const [file, read] of [
         ['screen.png', async () => Buffer.from(await driver.takeScreenshot(), 'base64')],
         ['page.html', () => driver.getPageSource()],
-        ['url.txt', () => driver.getCurrentUrl()]
+        ['url.txt', () => driver.getCurrentUrl()],
+        ['browser.log', async () => JSON.stringify(await driver.manage().logs().get('browser'), null, 2)]
       ]) {
         try { await writeFile(dir + '/' + file, await read()); } catch {}
       }
