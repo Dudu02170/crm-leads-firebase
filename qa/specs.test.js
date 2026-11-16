@@ -36,7 +36,7 @@ scenario('editar status move lead para coluna correta do funil',async p=>{
  await p.click('button[onclick="switchTab(\'kanban\')"]');
  const columns=await p.driver.findElements(By.css('.kol'));
  let found=false;
- for(const col of columns){const text=await col.getText();if(text.startsWith('Fechado')){assert.match(text,/Ana QA/);found=true;}}
+ for(const col of columns){const text=await col.getText();if(text.toLocaleLowerCase('pt-BR').startsWith('fechado')){assert.match(text,/Ana QA/);found=true;}}
  assert.ok(found,'coluna Fechado existente');
 });
 scenario('cancelar exclusao preserva lead e confirmar remove',async p=>{
