@@ -16,12 +16,32 @@ scenario('status filtra leads fechados',async p=>{
  await login(p);await p.select('#filter-status','Fechado');
  assert.match(await p.text('#tbody'),/Bruno QA/);assert.doesNotMatch(await p.text('#tbody'),/Ana QA/);
 });
-scenario('novo lead aparece na tabela e na persistencia simulada',async p=>{
- await login(p);await p.click('button[onclick="openModal()"]');
- await p.fill('#f-nome','Carla QA');await p.fill('#f-ig','@carla.qa');
- await p.click('button[onclick="saveLead()"]');await p.waitText('#tbody','Carla QA');
- const leads=await p.driver.executeScript('return Object.values(window.__qaDb.leads)');
- assert.equal(leads.filter(l=>l.nome==='Carla QA').length,1);
+scenario('cadastros consecutivos preservam leads existentes sem sobrescrever chaves',async p=>{
+ await login(p);
+ const seeded=await p.driver.executeScript('return structuredClone(window.__qaDb.leads)');
+ const created=[];
+ for(const [nome,ig] of [['Carla QA','@carla.qa'],['Daniel QA','@daniel.qa']]){
+  await p.click('button[onclick="openModal()"]');
+  await p.fill('#f-nome',nome);await p.fill('#f-ig',ig);
+  await p.click('button[onclick="saveLead()"]');await p.waitText('#tbody',nome);
+  created.push(nome);
+  const persisted=await p.driver.executeScript('return structuredClone(window.__qaDb.leads)');
+  assert.equal(Object.keys(persisted).length,Object.keys(seeded).length+created.length,
+   'cada cadastro deve acrescentar um registro');
+  for(const [id,lead] of Object.entries(seeded)){
+   assert.deepEqual(persisted[id],lead,'cadastro alterou o lead preexistente '+id);
+   await p.waitText('#tbody',lead.nome);
+  }
+  for(const createdName of created){
+   assert.equal(Object.values(persisted).filter(l=>l.nome===createdName).length,1);
+   await p.waitText('#tbody',createdName);
+  }
+ }
+ const writes=await p.driver.executeScript("return window.__qaWrites.filter(x=>x.path.startsWith('leads/'))");
+ assert.equal(writes.length,2,'dois cadastros devem gerar duas gravações de lead');
+ assert.equal(new Set(writes.map(w=>w.path)).size,2,'cadastros devem usar chaves distintas');
+ assert.ok(writes.every(w=>!Object.hasOwn(seeded,w.path.slice('leads/'.length))),
+  'cadastros não podem reutilizar chaves dos dados iniciais');
 });
 scenario('instagram duplicado ignora maiusculas e arroba',async p=>{
  await login(p);await p.click('button[onclick="openModal()"]');
