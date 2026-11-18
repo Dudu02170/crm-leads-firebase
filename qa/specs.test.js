@@ -67,3 +67,46 @@ scenario('cancelar exclusao preserva lead e confirmar remove',async p=>{
  await p.driver.wait(async()=>!(await p.text('#tbody')).includes('Ana QA'),10000);
  assert.equal(await p.driver.executeScript('return Object.keys(window.__qaDb.leads).length'),1);
 });
+
+const crmState=p=>p.driver.executeScript('return structuredClone({leads:window.__qaDb.leads,activity:window.__qaDb.activity})');
+const crmWrites=p=>p.driver.executeScript("return window.__qaWrites.filter(w=>w.path.startsWith('leads/')||w.path.startsWith('activity/'))");
+scenario('editar mantendo o proprio instagram atualiza somente o lead escolhido',async p=>{
+ await login(p);const original=await crmState(p);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ await p.fill('#f-nome','Ana Atualizada QA');await p.fill('#f-ig','@ANA.QA');
+ await p.fill('#f-cidade','Cidade QA');await p.fill('#f-notas','Retorno fictício combinado');
+ await p.click('button[onclick="saveLead()"]');await p.waitText('#tbody','Ana Atualizada QA');
+ await p.driver.wait(()=>p.driver.executeScript("return !document.getElementById('modal-overlay').classList.contains('open')"),10000);
+ const saved=await crmState(p);
+ assert.equal(Object.keys(saved.leads).length,2,'editar não deve criar outro lead');
+ assert.deepEqual(saved.leads.qa2,original.leads.qa2,'outro lead deve ser preservado');
+ assert.equal(saved.leads.qa1.nome,'Ana Atualizada QA');assert.equal(saved.leads.qa1.ig,'@ANA.QA');
+ assert.equal(saved.leads.qa1.cidade,'Cidade QA');assert.equal(saved.leads.qa1.notas,'Retorno fictício combinado');
+ assert.equal(saved.leads.qa1.status,original.leads.qa1.status);
+ const writes=await crmWrites(p);
+ assert.deepEqual(writes.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+ const activity=Object.values(saved.activity);
+ assert.equal(activity.length,1);assert.equal(activity[0].who,'Pessoa QA');
+ assert.match(activity[0].action,/editou.*Ana Atualizada QA/);
+});
+scenario('editar com instagram de outro lead rejeita sem alterar dados ou atividade',async p=>{
+ await login(p);const original=await crmState(p);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ await p.fill('#f-nome','Alteracao rejeitada QA');await p.fill('#f-ig','BRUNO.QA');
+ await p.click('button[onclick="saveLead()"]');await p.alert(/já cadastrado/);
+ assert.deepEqual(await crmState(p),original);
+ assert.deepEqual(await crmWrites(p),[],'rejeição não deve gravar lead nem atividade');
+ assert.equal(await p.driver.executeScript("return document.getElementById('modal-overlay').classList.contains('open')"),true);
+});
+scenario('cancelar edicao descarta rascunho e reabre valores persistidos',async p=>{
+ await login(p);const original=await crmState(p);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ await p.fill('#f-nome','Rascunho QA');await p.fill('#f-notas','Nota não salva');
+ await p.select('#f-status','Perdido');
+ await p.click('#modal-overlay button[onclick="closeModal()"]');
+ assert.deepEqual(await crmState(p),original);assert.deepEqual(await crmWrites(p),[]);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ assert.equal(await (await p.element('#f-nome')).getAttribute('value'),original.leads.qa1.nome);
+ assert.equal(await (await p.element('#f-status')).getAttribute('value'),original.leads.qa1.status);
+ assert.equal(await (await p.element('#f-notas')).getAttribute('value'),original.leads.qa1.notas||'');
+});
