@@ -110,3 +110,34 @@ scenario('cancelar edicao descarta rascunho e reabre valores persistidos',async 
  assert.equal(await (await p.element('#f-status')).getAttribute('value'),original.leads.qa1.status);
  assert.equal(await (await p.element('#f-notas')).getAttribute('value'),original.leads.qa1.notas||'');
 });
+
+scenario('busca status e segmento combinam filtros sem modificar leads ou atividade',async p=>{
+ await login(p);
+ const original=await crmState(p);
+ const cases=[
+  ['@ANA.QA','Prospect','Artesanato/Ateliê',['Ana QA']],
+  ['@ANA.QA','Fechado','Artesanato/Ateliê',[]],
+  ['QA','Fechado','Cutelaria',['Bruno QA']],
+  ['QA','Fechado','Artesanato/Ateliê',[]],
+  ['cUtElArIa','','Cutelaria',['Bruno QA']],
+  ['','','Artesanato/Ateliê',['Ana QA']],
+  ['','','',['Ana QA','Bruno QA']]
+ ];
+ for(const [query,status,segment,expected] of cases){
+  await p.fill('#search',query);
+  await p.select('#filter-status',status);
+  await p.select('#filter-seg',segment);
+  const context=JSON.stringify({query,status,segment});
+  await p.driver.wait(async()=>{
+   const names=await p.driver.findElements(By.css('#tbody .name-cell > div:last-child > div:first-child'));
+   const actual=await Promise.all(names.map(e=>e.getText()));
+   return JSON.stringify(actual)===JSON.stringify(expected);
+  },10000,'filtros devem retornar exatamente os leads esperados: '+context);
+  if(!expected.length)await p.waitText('#tbody','Nenhum lead encontrado.');
+  assert.equal(await (await p.element('#search')).getAttribute('value'),query);
+  assert.equal(await (await p.element('#filter-status')).getAttribute('value'),status);
+  assert.equal(await (await p.element('#filter-seg')).getAttribute('value'),segment);
+  assert.deepEqual(await crmState(p),original,'filtros alteraram dados: '+context);
+  assert.deepEqual(await crmWrites(p),[],'filtros gravaram dados: '+context);
+ }
+});
