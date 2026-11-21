@@ -141,3 +141,113 @@ scenario('busca status e segmento combinam filtros sem modificar leads ou ativid
   assert.deepEqual(await crmWrites(p),[],'filtros gravaram dados: '+context);
  }
 });
+
+async function contactDates(p){
+ return p.driver.executeScript(`return [-1,0,1].map(offset=>{
+  const date=new Date();date.setDate(date.getDate()+offset);
+  return [date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+ })`);
+}
+async function setNextContact(p,value){
+ // ISO no controle nativo; o calendário visual/locale do Chrome não faz parte desta verificação.
+ await p.driver.executeScript(`const field=document.getElementById('f-proximo');field.value=arguments[0];
+  field.dispatchEvent(new Event('input',{bubbles:true}));field.dispatchEvent(new Event('change',{bubbles:true}));`,value);
+}
+async function saveModal(p){
+ await p.click('button[onclick="saveLead()"]');
+ await p.driver.wait(()=>p.driver.executeScript("return !document.getElementById('modal-overlay').classList.contains('open')"),10000);
+}
+async function schedule(p,id,value){
+ await p.click(`button[onclick="openModal('${id}')"]`);await setNextContact(p,value);await saveModal(p);
+}
+async function contactCell(p,id){
+ const edit=await p.element(`button[onclick="openModal('${id}')"]`);
+ return p.driver.executeScript('return arguments[0].closest("tr").querySelector(".next-contact").textContent',edit);
+}
+
+scenario('proximo contato salva e atualiza tabela e funil preservando outros leads',async p=>{
+ await login(p);const original=await crmState(p),[,today,future]=await contactDates(p);
+ await schedule(p,'qa1',today);
+ assert.match(await contactCell(p,'qa1'),/Hoje/);
+ await p.select('#filter-agenda','pendente');
+ assert.equal((await p.driver.findElements(By.css('#tbody .name-cell'))).length,1);
+ await p.waitText('#tbody','Ana QA');await p.select('#filter-agenda','');
+ let saved=await crmState(p);
+ assert.equal(saved.leads.qa1.proximoContato,today);assert.equal(saved.leads.qa1.data,original.leads.qa1.data);
+ assert.deepEqual(saved.leads.qa2,original.leads.qa2);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),today);
+ await p.click('#modal-overlay button[onclick="closeModal()"]');
+ await p.click('button[onclick="switchTab(\'kanban\')"]');
+ const cards=await p.driver.findElements(By.css('.kcard'));
+ const ana=await (async()=>{for(const card of cards)if((await card.getText()).includes('Ana QA'))return card;})();
+ assert.ok(ana);assert.match(await ana.getText(),/Próximo contato: Hoje/);
+ await ana.click();await setNextContact(p,future);await saveModal(p);
+ await p.waitText('#kanban','Agendado');
+ await p.click('button[onclick="switchTab(\'leads\')"]');
+ assert.match(await contactCell(p,'qa1'),/Agendado/,'voltar do funil deve mostrar a edição atual');
+ saved=await crmState(p);assert.equal(saved.leads.qa1.proximoContato,future);
+ assert.deepEqual(saved.leads.qa2,original.leads.qa2);assert.equal(Object.keys(saved.leads).length,2);
+ assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1','leads/qa1']);
+});
+
+scenario('agenda combina atrasados futuros sem data e filtros existentes sem gravar',async p=>{
+ await login(p);const [past,,future]=await contactDates(p);
+ await schedule(p,'qa1',past);await schedule(p,'qa2',future);
+ assert.equal((await crmState(p)).leads.qa2.seg,'Cutelaria','editar a agenda deve preservar segmento legado fora das opções fixas');
+ await p.click('button[onclick="openModal()"]');
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),'');
+ await p.fill('#f-nome','Carla Sem Agenda QA');await p.fill('#f-ig','@carla.agenda.qa');await saveModal(p);
+ const before=await crmState(p),writes=await crmWrites(p);
+ const cases=[
+  ['pendente','','','',['Ana QA']],
+  ['futuro','','','',['Bruno QA']],
+  ['sem','','','',['Carla Sem Agenda QA']],
+  ['pendente','Fechado','','',[]],
+  ['futuro','Fechado','Cutelaria','Bruno',['Bruno QA']],
+  ['futuro','','','Ana',[]],
+  ['pendente','','Artesanato/Ateliê','Ana',['Ana QA']],
+  ['','','','',['Ana QA','Bruno QA','Carla Sem Agenda QA']]
+ ];
+ for(const [agenda,status,segment,query,expected] of cases){
+  await p.fill('#search',query);await p.select('#filter-status',status);
+  await p.select('#filter-seg',segment);await p.select('#filter-agenda',agenda);
+  const names=await p.driver.findElements(By.css('#tbody .name-cell > div:last-child > div:first-child'));
+  assert.deepEqual((await Promise.all(names.map(e=>e.getText()))).sort(),expected.slice().sort());
+  if(!expected.length)await p.waitText('#tbody','Nenhum lead encontrado.');
+  assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ }
+});
+
+scenario('cancelar rascunho preserva agenda e limpar campo remove so o agendamento',async p=>{
+ await login(p);const [,today,future]=await contactDates(p);await schedule(p,'qa1',today);
+ const before=await crmState(p),writes=await crmWrites(p);
+ await p.click('button[onclick="openModal(\'qa1\')"]');await setNextContact(p,future);
+ await p.click('#modal-overlay button[onclick="closeModal()"]');
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),today);
+ await setNextContact(p,'');await saveModal(p);
+ const after=await crmState(p);
+ assert.equal(after.leads.qa1.proximoContato,'');assert.equal((await contactCell(p,'qa1')).trim(),'—');
+ assert.deepEqual(after.leads.qa2,before.leads.qa2);
+ for(const key of ['nome','ig','data','notas','status','interesse','cidade'])assert.equal(after.leads.qa1[key],before.leads.qa1[key]);
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),'');
+});
+
+scenario('novo lead com agendamento preserva os preexistentes e reabre a data salva',async p=>{
+ await login(p);const original=await crmState(p),[,,future]=await contactDates(p);
+ await p.click('button[onclick="openModal()"]');
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),'');
+ await p.fill('#f-nome','Carla Agendada QA');await p.fill('#f-ig','@carla.agendada.qa');
+ await setNextContact(p,future);await saveModal(p);
+ const saved=await crmState(p),entry=Object.entries(saved.leads).find(([,l])=>l.nome==='Carla Agendada QA');
+ assert.ok(entry);assert.equal(entry[1].proximoContato,future);assert.ok(entry[1].createdAt);
+ assert.equal(Object.keys(saved.leads).length,3);
+ for(const [id,lead] of Object.entries(original.leads))assert.deepEqual(saved.leads[id],lead);
+ assert.match(await contactCell(p,entry[0]),/Agendado/);
+ await p.click(`button[onclick="openModal('${entry[0]}')"]`);
+ assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),future);
+ assert.equal(Object.values(saved.activity).length,1);
+});
