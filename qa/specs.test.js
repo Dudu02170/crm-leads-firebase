@@ -347,7 +347,8 @@ scenario('registrar contato hoje preserva agenda e dados e impede repeticao dura
  assert.match(activity.at(-1).action,/registrou contato realizado hoje.*Ana QA/);
  assert.equal(activity.at(-1).who,'Pessoa QA');
  const newWrites=(await crmWrites(p)).slice(writes.length);
- assert.deepEqual(newWrites.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+ assert.deepEqual(newWrites.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1/data','leads/qa1/updatedAt']);
+ assert.equal(await p.driver.executeScript('return window.__qaAtomicUpdates.length'),1,'contato e atividade usam uma única atualização multipath');
 });
 
 scenario('cancelar contato preserva lead e confirmar nao inventa proximo agendamento',async p=>{
@@ -375,5 +376,26 @@ scenario('falha ao registrar contato preserva dados e libera uma nova tentativa'
  await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);await waitContactRecorded(p,'qa1',today);
  const saved=await crmState(p);assert.equal(saved.leads.qa1.data,today);
  assert.deepEqual(saved.leads.qa2,before.leads.qa2);assert.equal(Object.values(saved.activity).length,1);
- assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+ assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1/data','leads/qa1/updatedAt']);
+});
+
+scenario('falha na atividade rejeita o contato inteiro e permite tentar novamente',async p=>{
+ await login(p);const [,today]=await contactDates(p),before=await crmState(p);
+ await p.driver.executeScript('window.__qaFailNextActivityWrite=true');
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);
+ await p.alert(/Não foi possível registrar o contato/);
+ await p.driver.wait(async()=>(await contactButton(p)).isEnabled(),10000);
+ assert.deepEqual(await crmState(p),before,'rejeição da atividade deve preservar também a data do contato');
+ assert.deepEqual(await crmWrites(p),[]);
+ assert.deepEqual(await p.driver.executeScript('return window.__qaAtomicUpdates'),[]);
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);await waitContactRecorded(p,'qa1',today);
+ const saved=await crmState(p),updates=await p.driver.executeScript('return window.__qaAtomicUpdates');
+ assert.equal(updates.length,1);assert.equal(updates[0]['leads/qa1/data'],today);
+ assert.equal(updates[0]['leads/qa1/updatedAt'],saved.leads.qa1.updatedAt);
+ const activityPath=Object.keys(updates[0]).find(path=>path.startsWith('activity/'));
+ assert.ok(activityPath);assert.equal(Object.keys(updates[0]).length,3);
+ assert.deepEqual(updates[0][activityPath],saved.activity[activityPath.slice('activity/'.length)]);
+ assert.equal(Object.values(saved.activity).length,1);
+ assert.deepEqual(saved.leads.qa1,{...before.leads.qa1,data:today,updatedAt:saved.leads.qa1.updatedAt});
+ assert.deepEqual(saved.leads.qa2,before.leads.qa2);
 });

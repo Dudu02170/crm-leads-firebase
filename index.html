@@ -595,9 +595,13 @@ async function recordContact(id) {
   if(!confirm(`Registrar que o contato com "${lead.nome||'este lead'}" foi realizado hoje? O próximo agendamento será mantido.`))return;
   pendingContacts.add(id);renderTable();
   try {
-    await leadsRef.child(id).update({data:today,updatedAt:Date.now()});
     const name=document.createElement('span');name.textContent=lead.nome||'lead';
-    logActivity(currentUser.displayName||currentUser.email.split('@')[0],`registrou contato realizado hoje com <strong>${name.innerHTML}</strong>`);
+    const activityId=activityRef.push().key,ts=Date.now();
+    const updates={};
+    updates[`leads/${id}/data`]=today;
+    updates[`leads/${id}/updatedAt`]=ts;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`registrou contato realizado hoje com <strong>${name.innerHTML}</strong>`,ts};
+    await db.ref().update(updates);
   } catch(error) {
     alert('Não foi possível registrar o contato. Tente novamente.');
   } finally {

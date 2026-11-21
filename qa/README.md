@@ -5,7 +5,7 @@ cd qa
 npm install
 npm test
 ```
-Vinte cenários: credencial inválida, busca/filtros combinados, criação sem sobrescrever leads existentes, duplicata de Instagram, edição/funil, exclusão/cancelamento e quatro regressões de próximo contato.
+Vinte e um cenários: credencial inválida, busca/filtros combinados, criação sem sobrescrever leads existentes, duplicata de Instagram, edição/funil, exclusão/cancelamento e quatro regressões de próximo contato.
 O servidor local substitui os scripts externos do Firebase por um adaptador em memória. As telas, validações e renderização continuam sendo as reais do index.html.
 Apenas no sandbox: qa@example.test / SenhaQA123!. Todos os dados são fictícios.
 Não mede regras de segurança, autenticação real, durabilidade ou concorrência do Firebase. Para esses casos é necessária uma suíte posterior com Firebase Emulator.
@@ -26,4 +26,11 @@ Duas regressões adicionais verificam a ordem exata de atrasado/hoje/futuro/sem 
 ## Registrar contato realizado
 Na tabela, Contato feito hoje pede confirmação e atualiza somente a data do último contato e updatedAt. Preserva a agenda, responsável, status, notas e os outros leads; registra a atividade da pessoa conectada. O botão fica bloqueado durante a gravação e quando o último contato já é hoje. Cancelar não grava. Falha na gravação do lead apresenta erro e libera nova tentativa. Não realiza contato externo.
 
-Três novas regressões cobrem confirmação com agenda preservada, bloqueio durante envio, cancelamento, lead sem agenda e falha seguida de recuperação. No adaptador QA, __qaHoldNextLeadWrite e __qaReleaseLeadWrite permitem segurar/liberar uma gravação sem sleep fixo; __qaFailNextLeadWrite rejeita a próxima atualização de lead. Não alteram a implementação da ação nem são integração Firebase. A injeção de erro cobre a gravação do lead, não a gravação separada de atividade.
+Três novas regressões cobrem confirmação com agenda preservada, bloqueio durante envio, cancelamento, lead sem agenda e falha seguida de recuperação. No adaptador QA, __qaHoldNextLeadWrite e __qaReleaseLeadWrite permitem segurar/liberar uma gravação sem sleep fixo; __qaFailNextLeadWrite rejeita a próxima atualização de lead. Não alteram a implementação da ação nem são integração Firebase. A injeção de erro cobre o caminho do lead e, com __qaFailNextActivityWrite, o caminho de atividade. Na ação de contato, os dois são enviados em uma única atualização multipath.
+
+## Atualização conjunta do contato e da atividade
+QA-CRM-001: a versão 0d7108f atualizava a data antes de gravar a atividade; uma falha nesta segunda etapa deixava contato sem atividade. A ação agora reserva a chave da atividade sem gravar e envia três caminhos no mesmo `db.ref().update`: data e updatedAt do lead, mais o novo registro de atividade. Não substitui o lead inteiro nem altera outras coleções.
+
+O adaptador QA prepara todas as alterações em uma cópia e só publica após verificar as falhas injetadas. `__qaAtomicUpdates` registra cada chamada multipath aceita; `__qaWrites` lista seus caminhos, não o número de requisições de rede. A nova regressão rejeita o caminho da atividade, exige dados/atividade intactos, verifica nova tentativa bem-sucedida e confere os três caminhos em uma única chamada. As vinte regressões anteriores continuam ativas, com as asserções de caminhos atualizadas para o novo formato de escrita.
+
+Contrato da API consultado: https://firebase.google.com/docs/database/web/read-and-write#update_specific_fields (atualização simultânea de vários caminhos). Essa documentação não substitui execução com SDK/Emulator real: regras, eventos otimistas e persistência/concorrência reais continuam fora da suíte. Criar/editar/excluir lead ainda usa os fluxos anteriores; esta correção se limita a Contato feito hoje.

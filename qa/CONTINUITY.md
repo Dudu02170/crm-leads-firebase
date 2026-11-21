@@ -11,7 +11,7 @@
 - Editar um lead com segmento legado fora das opções fixas preserva esse valor. Voltar à tabela após editar no funil mostra o valor atualizado.
 
 ## Como testar
-`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
+`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e um cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
 
 ## Dependência e limites
 Parte da branch `qa/test-automation`, do PR #1 ainda aberto. Revisar/integrar a suíte antes de retargetar a funcionalidade para main, sem duplicar commits, merge automático ou force-push. Não há AGENTS.md no checkout nem nos diretórios ancestrais consultados.
@@ -21,5 +21,9 @@ Interface real com Firebase em memória e dados fictícios. Não executa autenti
 1. Fila por data e registro explícito de contato realizado entregues. Avaliar uma decisão explícita de reagendar/remover um contato vencido após registrar o realizado, sem apagar a data silenciosamente.
 2. Validar persistência e regras com Firebase Emulator antes de afirmar integração real; conferir o controle de data em outros navegadores.
 
-## Limites do registro de contato
-As operações de atualizar o lead e registrar a atividade são separadas, como no fluxo de edição existente; não há garantia de atomicidade entre elas. A regressão de falha simula somente rejeição do update do lead. O bloqueio é local à página; concorrência real e falha exclusiva do log exigem validação própria com Firebase Emulator.
+## QA-CRM-001 — Data alterada quando a atividade falha
+Na versão 0d7108f, a atualização do lead era concluída antes da atividade. A reprodução da função real isolada com adaptadores confirmou a data alterada mesmo quando o log falhava; não era uma integração de navegador/Firebase.
+
+Correção: a ação usa uma única atualização multipath com data/updatedAt do lead e o registro da atividade. A chave da atividade é reservada antes, sem gravação. Critérios: rejeição de qualquer parte preserva todo o estado no adaptador; a UI informa erro, libera o botão e permite nova tentativa; sucesso envia exatamente três caminhos sem substituir outros campos ou leads; os bloqueios/cancelamentos anteriores permanecem.
+
+O contrato multipath é documentado pelo Firebase (https://firebase.google.com/docs/database/web/read-and-write). A suíte verifica a ação real com um adaptador que simula esse contrato, incluindo falha exclusiva da atividade. Não executa SDK, regras, eventos otimistas ou persistência reais. O bloqueio continua local à página e não deduplica clientes concorrentes. A correção se limita ao registro de contato: criação/edição/exclusão mantêm os fluxos anteriores. Próxima validação necessária: permissões e rejeição do lote com Firebase Emulator.
