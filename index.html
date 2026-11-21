@@ -217,13 +217,23 @@
         <select id="filter-seg" onchange="renderTable()">
           <option value="">Todos os segmentos</option>
         </select>
+        <select id="filter-agenda" aria-label="Filtrar próximos contatos" onchange="renderTable()">
+          <option value="">Todos os agendamentos</option>
+          <option value="pendente">Hoje ou atrasados</option>
+          <option value="futuro">Futuros</option>
+          <option value="sem">Sem próximo contato</option>
+        </select>
+        <select id="order-leads" aria-label="Ordenar leads" onchange="renderTable()">
+          <option value="updated">Atualizados recentemente</option>
+          <option value="proximo">Próximo contato (mais antigo primeiro)</option>
+        </select>
         <button class="btn btn-primary" onclick="openModal()">+ Novo lead</button>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
             <th>Lead</th><th>Segmento</th><th>Status</th>
-            <th>Interesse</th><th>Responsável</th><th>Último contato</th><th>Dias parado</th><th>Ações</th>
+            <th>Interesse</th><th>Responsável</th><th>Último contato</th><th>Dias parado</th><th>Próximo contato</th><th>Ações</th>
           </tr></thead>
           <tbody id="tbody"></tbody>
         </table>
@@ -309,6 +319,7 @@
     </div>
     <div class="form-row"><label>Interesse / Produto</label><input id="f-interesse" placeholder="Ex: Resina epoxi cristal, 10kg/mês"></div>
     <div class="form-row"><label>Data do último contato</label><input type="date" id="f-data"></div>
+    <div class="form-row"><label for="f-proximo">Próximo contato (opcional)</label><input type="date" id="f-proximo" max="9999-12-31"></div>
     <div class="form-row"><label>Notas</label><textarea id="f-notas" placeholder="Observações, objeções, próximos passos..."></textarea></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -340,6 +351,22 @@ let leads = {}, editingId = null, currentTab = 'leads';
 function initials(n) { return (n||'?').split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase().slice(0,2); }
 function avatarColor(n) { let h=0; for(let c of (n||'?')) h+=c.charCodeAt(0); return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
 function fmtDate(d) { if(!d) return '—'; const[y,m,dd]=d.split('-'); return `${dd}/${m}`; }
+function validContactDate(value) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(value||''))return false;
+  const date=new Date(value+'T00:00:00Z');
+  return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value;
+}
+function todayLocalISO() {
+  const date=new Date();
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function nextContactBadge(value) {
+  if(!validContactDate(value))return '—';
+  const today=todayLocalISO(),[year,month,day]=value.split('-');
+  const label=value<today?'Atrasado':value===today?'Hoje':'Agendado';
+  const cls=value<today?'days-late':value===today?'days-warn':'days-ok';
+  return `<span class="days-badge ${cls}">${label} · ${day}/${month}/${year}</span>`;
+}
 function daysSince(d) { if(!d) return null; return Math.floor((new Date()-new Date(d))/(1000*60*60*24)); }
 function daysBadge(d) {
   const n = daysSince(d);
@@ -400,10 +427,16 @@ function getFiltered() {
   const q=(document.getElementById('search')||{}).value?.toLowerCase()||'';
   const fs=(document.getElementById('filter-status')||{}).value||'';
   const fg=(document.getElementById('filter-seg')||{}).value||'';
+  const agenda=document.getElementById('filter-agenda').value;
+  const today=todayLocalISO();
   return Object.entries(leads).filter(([id,l])=>{
     if(q&&!l.nome?.toLowerCase().includes(q)&&!l.ig?.toLowerCase().includes(q)&&!l.seg?.toLowerCase().includes(q))return false;
     if(fs&&l.status!==fs)return false;
     if(fg&&l.seg!==fg)return false;
+    const scheduled=validContactDate(l.proximoContato);
+    if(agenda==='pendente'&&(!scheduled||l.proximoContato>today))return false;
+    if(agenda==='futuro'&&(!scheduled||l.proximoContato<=today))return false;
+    if(agenda==='sem'&&scheduled)return false;
     return true;
   }).map(([id,l])=>({...l,id}));
 }
@@ -430,10 +463,18 @@ function renderSegFilter() {
   if(sel)sel.innerHTML='<option value="">Todos os segmentos</option>'+segs.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
 }
 
+function compareNextContact(a,b) {
+  const scheduledA=validContactDate(a.proximoContato),scheduledB=validContactDate(b.proximoContato);
+  if(scheduledA!==scheduledB)return scheduledA?-1:1;
+  if(scheduledA&&a.proximoContato!==b.proximoContato)return a.proximoContato<b.proximoContato?-1:1;
+  return (a.nome||'').localeCompare(b.nome||'','pt-BR',{sensitivity:'base'})||String(a.id).localeCompare(String(b.id));
+}
+
 function renderTable() {
-  const fl=getFiltered().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+  const order=document.getElementById('order-leads').value;
+  const fl=getFiltered().sort(order==='proximo'?compareNextContact:(a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
   const tb=document.getElementById('tbody');if(!tb)return;
-  if(!fl.length){tb.innerHTML=`<tr><td colspan="8"><div class="empty">Nenhum lead encontrado.</div></td></tr>`;return;}
+  if(!fl.length){tb.innerHTML=`<tr><td colspan="9"><div class="empty">Nenhum lead encontrado.</div></td></tr>`;return;}
   tb.innerHTML=fl.map(l=>{
     const av=avatarColor(l.nome);const bkey=STATUS_KEY[l.status]||'Prospect';
     const igH=igUrl(l.ig);const waH=waUrl(l.wa);
@@ -452,6 +493,7 @@ function renderTable() {
       <td style="font-size:12px;color:var(--text2)">${l.owner||'—'}</td>
       <td>${fmtDate(l.data)}</td>
       <td>${daysBadge(l.data)}</td>
+      <td class="next-contact">${nextContactBadge(l.proximoContato)}</td>
       <td><button class="btn btn-sm" onclick="openModal('${l.id}')">Editar</button> <button class="btn btn-sm btn-danger" onclick="deleteLead('${l.id}')">✕</button></td>
     </tr>`;
   }).join('');
@@ -470,6 +512,7 @@ function renderKanban() {
           <div class="kcard-name">${l.nome||'—'}</div>
           <div class="kcard-seg">${l.seg||''}</div>
           ${l.notas?`<div class="kcard-nota">${l.notas}</div>`:''}
+          ${validContactDate(l.proximoContato)?`<div class="kcard-next">Próximo contato: ${nextContactBadge(l.proximoContato)}</div>`:''}
           <div class="kcard-footer">
             ${igH?`<a class="kcard-ig" href="${igH}" target="_blank" onclick="event.stopPropagation()">${l.ig}</a>`:'<span></span>'}
             ${d!==null?`<span style="font-size:10px;color:${dc};font-weight:500">${d}d</span>`:''}
@@ -493,10 +536,13 @@ function openModal(id=null) {
   document.getElementById('f-ig').value=l.ig||'';
   document.getElementById('f-wa').value=l.wa||'';
   document.getElementById('f-cidade').value=l.cidade||'';
-  document.getElementById('f-seg').value=l.seg||'Artesanato/Ateliê';
+  const segment=document.getElementById('f-seg');
+  if(l.seg&&!Array.from(segment.options).some(option=>option.value===l.seg))segment.add(new Option(l.seg,l.seg));
+  segment.value=l.seg||'Artesanato/Ateliê';
   document.getElementById('f-status').value=l.status||'Prospect';
   document.getElementById('f-interesse').value=l.interesse||'';
   document.getElementById('f-data').value=l.data||new Date().toISOString().slice(0,10);
+  document.getElementById('f-proximo').value=validContactDate(l.proximoContato)?l.proximoContato:'';
   document.getElementById('f-notas').value=l.notas||'';
   document.getElementById('modal-overlay').classList.add('open');
 }
@@ -505,6 +551,10 @@ function closeModal(){document.getElementById('modal-overlay').classList.remove(
 async function saveLead() {
   const nome=document.getElementById('f-nome').value.trim()||'Sem nome';
   const ig=document.getElementById('f-ig').value.trim();
+  const proximoContato=document.getElementById('f-proximo').value;
+  if(proximoContato&&!validContactDate(proximoContato)){
+    alert('Informe uma data válida para o próximo contato.');return;
+  }
 
   // Verificação anti-duplicata pelo @Instagram
   if (ig) {
@@ -521,7 +571,7 @@ async function saveLead() {
   }
   const oldStatus=editingId?leads[editingId]?.status:null;
   const newStatus=document.getElementById('f-status').value;
-  const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
+  const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,proximoContato,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
   const who=currentUser.displayName||currentUser.email.split('@')[0];
   if(editingId){await leadsRef.child(editingId).update(data);logActivity(who,oldStatus!==newStatus?`atualizou <strong>${nome}</strong> para ${newStatus}`:`editou <strong>${nome}</strong>`);}
   else{const r=leadsRef.push();data.createdAt=Date.now();await r.set(data);logActivity(who,`adicionou <strong>${nome}</strong> como ${newStatus}`);}
@@ -543,6 +593,7 @@ function switchTab(t) {
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.textContent.toLowerCase().includes(labels[t])));
   ['leads','kanban','atividade','estrategia'].forEach(id=>document.getElementById('tab-'+id).style.display=id===t?'block':'none');
   if(t==='kanban')renderKanban();
+  if(t==='leads')renderTable();
 }
 
 document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target===document.getElementById('modal-overlay'))closeModal();});
