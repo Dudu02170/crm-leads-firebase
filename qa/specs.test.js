@@ -314,3 +314,66 @@ scenario('fila desempata por nome e id e reposiciona somente o lead editado',asy
  const newWrites=(await crmWrites(p)).slice(writes.length).filter(w=>w.path.startsWith('leads/'));
  assert.deepEqual(newWrites.map(w=>w.path),['leads/qa1','leads/qa2']);
 });
+
+async function contactButton(p,id='qa1'){return p.element(`[data-contact-id="${id}"]`);}
+async function waitContactRecorded(p,id,today){
+ await p.driver.wait(()=>p.driver.executeScript('return window.__qaDb.leads[arguments[0]].data===arguments[1]',id,today),10000);
+ await p.driver.wait(async()=>!(await (await contactButton(p,id)).isEnabled()),10000);
+}
+
+scenario('registrar contato hoje preserva agenda e dados e impede repeticao durante envio',async p=>{
+ await login(p);const [,today,future]=await contactDates(p);await schedule(p,'qa1',future);
+ await p.select('#order-leads','proximo');
+ const before=await crmState(p),writes=await crmWrites(p);
+ await p.driver.executeScript('window.__qaHoldNextLeadWrite=true');
+ await (await contactButton(p)).click();await p.alert(/próximo agendamento será mantido/);
+ await p.waitText('[data-contact-id="qa1"]','Registrando...');
+ assert.equal(await (await contactButton(p)).isEnabled(),false);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ await (await contactButton(p)).click();
+ assert.deepEqual(await crmWrites(p),writes,'botão bloqueado não pode iniciar uma segunda gravação');
+ await p.driver.executeScript('window.__qaReleaseLeadWrite()');
+ await waitContactRecorded(p,'qa1',today);
+ const saved=await crmState(p),expected={...before.leads.qa1,data:today,updatedAt:saved.leads.qa1.updatedAt};
+ assert.deepEqual(saved.leads.qa1,expected);assert.deepEqual(saved.leads.qa2,before.leads.qa2);
+ assert.equal(saved.leads.qa1.proximoContato,future);
+ assert.ok(saved.leads.qa1.updatedAt>=before.leads.qa1.updatedAt);
+ assert.equal(await (await p.element('#order-leads')).getAttribute('value'),'proximo');
+ const button=await contactButton(p);
+ const displayed=await p.driver.executeScript('const row=arguments[0].closest("tr");return {date:row.querySelector(".last-contact").textContent,idle:row.querySelector(".days-idle").textContent}',button);
+ assert.equal(displayed.date,today.slice(8,10)+'/'+today.slice(5,7));assert.equal(displayed.idle,'0d');
+ const activity=Object.values(saved.activity);
+ assert.equal(activity.length,Object.values(before.activity).length+1);
+ assert.match(activity.at(-1).action,/registrou contato realizado hoje.*Ana QA/);
+ assert.equal(activity.at(-1).who,'Pessoa QA');
+ const newWrites=(await crmWrites(p)).slice(writes.length);
+ assert.deepEqual(newWrites.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+});
+
+scenario('cancelar contato preserva lead e confirmar nao inventa proximo agendamento',async p=>{
+ await login(p);const [,today]=await contactDates(p),before=await crmState(p);
+ await (await contactButton(p)).click();
+ const dialog=await p.driver.wait(until.alertIsPresent(),10000);assert.match(await dialog.getText(),/foi realizado hoje/);await dialog.dismiss();
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),[]);
+ assert.equal(await (await contactButton(p)).isEnabled(),true);
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);await waitContactRecorded(p,'qa1',today);
+ const saved=await crmState(p);
+ assert.equal(Object.hasOwn(saved.leads.qa1,'proximoContato'),false);
+ assert.deepEqual(saved.leads.qa1,{...before.leads.qa1,data:today,updatedAt:saved.leads.qa1.updatedAt});
+ assert.deepEqual(saved.leads.qa2,before.leads.qa2);
+ assert.equal(Object.values(saved.activity).length,1);
+ assert.equal(await (await contactButton(p)).isEnabled(),false);
+});
+
+scenario('falha ao registrar contato preserva dados e libera uma nova tentativa',async p=>{
+ await login(p);const [,today]=await contactDates(p),before=await crmState(p);
+ await p.driver.executeScript('window.__qaFailNextLeadWrite=true');
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);
+ await p.alert(/Não foi possível registrar o contato/);
+ await p.driver.wait(async()=>(await contactButton(p)).isEnabled(),10000);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),[]);
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);await waitContactRecorded(p,'qa1',today);
+ const saved=await crmState(p);assert.equal(saved.leads.qa1.data,today);
+ assert.deepEqual(saved.leads.qa2,before.leads.qa2);assert.equal(Object.values(saved.activity).length,1);
+ assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+});
