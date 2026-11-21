@@ -223,6 +223,10 @@
           <option value="futuro">Futuros</option>
           <option value="sem">Sem próximo contato</option>
         </select>
+        <select id="order-leads" aria-label="Ordenar leads" onchange="renderTable()">
+          <option value="updated">Atualizados recentemente</option>
+          <option value="proximo">Próximo contato (mais antigo primeiro)</option>
+        </select>
         <button class="btn btn-primary" onclick="openModal()">+ Novo lead</button>
       </div>
       <div class="table-wrap">
@@ -459,8 +463,16 @@ function renderSegFilter() {
   if(sel)sel.innerHTML='<option value="">Todos os segmentos</option>'+segs.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
 }
 
+function compareNextContact(a,b) {
+  const scheduledA=validContactDate(a.proximoContato),scheduledB=validContactDate(b.proximoContato);
+  if(scheduledA!==scheduledB)return scheduledA?-1:1;
+  if(scheduledA&&a.proximoContato!==b.proximoContato)return a.proximoContato<b.proximoContato?-1:1;
+  return (a.nome||'').localeCompare(b.nome||'','pt-BR',{sensitivity:'base'})||String(a.id).localeCompare(String(b.id));
+}
+
 function renderTable() {
-  const fl=getFiltered().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+  const order=document.getElementById('order-leads').value;
+  const fl=getFiltered().sort(order==='proximo'?compareNextContact:(a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
   const tb=document.getElementById('tbody');if(!tb)return;
   if(!fl.length){tb.innerHTML=`<tr><td colspan="9"><div class="empty">Nenhum lead encontrado.</div></td></tr>`;return;}
   tb.innerHTML=fl.map(l=>{

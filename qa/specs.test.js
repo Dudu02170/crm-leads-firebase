@@ -251,3 +251,66 @@ scenario('novo lead com agendamento preserva os preexistentes e reabre a data sa
  assert.equal(await (await p.element('#f-proximo')).getAttribute('value'),future);
  assert.equal(Object.values(saved.activity).length,1);
 });
+
+async function addScheduledLead(p,name,handle,date=''){
+ await p.click('button[onclick="openModal()"]');await p.fill('#f-nome',name);await p.fill('#f-ig',handle);
+ await setNextContact(p,date);await saveModal(p);
+ const state=await crmState(p);return Object.keys(state.leads).find(id=>state.leads[id].ig===handle);
+}
+async function listedNames(p){
+ const names=await p.driver.findElements(By.css('#tbody .name-cell > div:last-child > div:first-child'));
+ return Promise.all(names.map(e=>e.getText()));
+}
+async function listedIds(p){
+ const buttons=await p.driver.findElements(By.css('#tbody button[onclick^="openModal("]'));
+ return Promise.all(buttons.map(async b=>(await b.getAttribute('onclick')).match(/openModal\('([^']+)'\)/)[1]));
+}
+
+scenario('fila por proximo contato combina filtros e restaura ordem recente sem gravar',async p=>{
+ await login(p);const [past,today,future]=await contactDates(p);
+ await schedule(p,'qa1',future);await schedule(p,'qa2',past);
+ await addScheduledLead(p,'Carla Hoje QA','@carla.hoje.qa',today);
+ await addScheduledLead(p,'Davi Sem Agenda QA','@davi.sem.qa');
+ const before=await crmState(p),writes=await crmWrites(p);
+ const recent=['Davi Sem Agenda QA','Carla Hoje QA','Bruno QA','Ana QA'];
+ assert.equal(await (await p.element('#order-leads')).getAttribute('value'),'updated');
+ assert.deepEqual(await listedNames(p),recent);
+ await p.select('#order-leads','proximo');
+ const queue=['Bruno QA','Carla Hoje QA','Ana QA','Davi Sem Agenda QA'];
+ assert.deepEqual(await listedNames(p),queue);
+ await p.select('#filter-agenda','pendente');assert.deepEqual(await listedNames(p),['Bruno QA','Carla Hoje QA']);
+ await p.select('#filter-status','Prospect');assert.deepEqual(await listedNames(p),['Carla Hoje QA']);
+ await p.select('#filter-status','');await p.select('#filter-agenda','futuro');
+ assert.deepEqual(await listedNames(p),['Ana QA']);
+ await p.select('#filter-agenda','sem');assert.deepEqual(await listedNames(p),['Davi Sem Agenda QA']);
+ await p.select('#filter-agenda','');await p.fill('#search','Carla');await p.select('#filter-seg','Artesanato/Ateliê');
+ assert.deepEqual(await listedNames(p),['Carla Hoje QA']);
+ await p.fill('#search','');await p.select('#filter-seg','');
+ assert.deepEqual(await listedNames(p),queue);
+ await p.click('button[onclick="switchTab(\'kanban\')"]');await p.click('button[onclick="switchTab(\'leads\')"]');
+ assert.equal(await (await p.element('#order-leads')).getAttribute('value'),'proximo');
+ assert.deepEqual(await listedNames(p),queue);
+ await p.select('#order-leads','updated');assert.deepEqual(await listedNames(p),recent);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+});
+
+scenario('fila desempata por nome e id e reposiciona somente o lead editado',async p=>{
+ await login(p);const [,today,future]=await contactDates(p);
+ await schedule(p,'qa1',today);await schedule(p,'qa2',today);
+ const anotherAna=await addScheduledLead(p,'Ana QA','@ana.agenda.dupla.qa',today);
+ const before=await crmState(p),writes=await crmWrites(p);
+ await p.select('#order-leads','proximo');
+ assert.deepEqual(await listedIds(p),['qa1',anotherAna,'qa2']);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ await schedule(p,'qa1',future);
+ assert.equal(await (await p.element('#order-leads')).getAttribute('value'),'proximo');
+ assert.deepEqual(await listedIds(p),[anotherAna,'qa2','qa1']);
+ const edited=await crmState(p);
+ assert.equal(edited.leads.qa1.proximoContato,future);
+ assert.deepEqual(edited.leads.qa2,before.leads.qa2);assert.deepEqual(edited.leads[anotherAna],before.leads[anotherAna]);
+ await schedule(p,'qa2','');assert.deepEqual(await listedIds(p),[anotherAna,'qa1','qa2']);
+ const saved=await crmState(p);
+ assert.equal(saved.leads.qa2.proximoContato,'');assert.deepEqual(saved.leads[anotherAna],before.leads[anotherAna]);
+ const newWrites=(await crmWrites(p)).slice(writes.length).filter(w=>w.path.startsWith('leads/'));
+ assert.deepEqual(newWrites.map(w=>w.path),['leads/qa1','leads/qa2']);
+});
