@@ -7,8 +7,10 @@ CRM web para uma equipe comercial organizar a prospecção de clientes pelo Inst
 ## Funcionalidades
 
 - **Leads** em tabela com busca e filtros por status e por segmento, mostrando responsável, interesse, data do último contato e **dias parado** (com alerta de cor quando o lead esfria).
+- **Próximo contato:** data opcional por lead, exibida na tabela e no funil como Hoje, Atrasado ou Agendado. Filtros de hoje/atrasados, futuros e sem agendamento combinam com status, segmento e busca. Limpar a data remove o agendamento. A ordenação opcional por próximo contato coloca as datas mais antigas primeiro e os leads sem agenda ao final; a ordenação recente continua como padrão.
 - **Funil Kanban:** Prospect → Primeiro contato → Em contato → Catálogo enviado → Em fechamento → Fechado / Perdido.
 - **Atalhos de contato:** links diretos para o WhatsApp (`wa.me`) e para o perfil do Instagram do lead.
+- **Contato feito hoje:** ação com confirmação na tabela para registrar um contato já realizado, mantendo o próximo agendamento, responsável, status e notas. Não envia mensagem ao cliente.
 - **Atividade da equipe:** registro em tempo real de quem criou, editou ou moveu cada lead.
 - **Estratégia:** roteiro de captação no Instagram em 5 etapas (encontrar, engajar, abordar, cadência de follow-up e segmentos-alvo), para padronizar o trabalho do time.
 - **Login e cadastro** de usuários com Firebase Authentication.

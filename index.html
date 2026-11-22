@@ -78,6 +78,7 @@
   .toolbar input { flex: 1; min-width: 180px; }
   .btn { padding: 7px 14px; font-size: 13px; border: 0.5px solid var(--border2); border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; }
   .btn:hover { background: var(--bg2); }
+  .btn:disabled { opacity: 0.55; cursor: default; }
   .btn-primary { background: var(--text); color: var(--bg); border-color: transparent; }
   .btn-primary:hover { opacity: 0.82; }
   .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -217,13 +218,23 @@
         <select id="filter-seg" onchange="renderTable()">
           <option value="">Todos os segmentos</option>
         </select>
+        <select id="filter-agenda" aria-label="Filtrar próximos contatos" onchange="renderTable()">
+          <option value="">Todos os agendamentos</option>
+          <option value="pendente">Hoje ou atrasados</option>
+          <option value="futuro">Futuros</option>
+          <option value="sem">Sem próximo contato</option>
+        </select>
+        <select id="order-leads" aria-label="Ordenar leads" onchange="renderTable()">
+          <option value="updated">Atualizados recentemente</option>
+          <option value="proximo">Próximo contato (mais antigo primeiro)</option>
+        </select>
         <button class="btn btn-primary" onclick="openModal()">+ Novo lead</button>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
             <th>Lead</th><th>Segmento</th><th>Status</th>
-            <th>Interesse</th><th>Responsável</th><th>Último contato</th><th>Dias parado</th><th>Ações</th>
+            <th>Interesse</th><th>Responsável</th><th>Último contato</th><th>Dias parado</th><th>Próximo contato</th><th>Ações</th>
           </tr></thead>
           <tbody id="tbody"></tbody>
         </table>
@@ -309,10 +320,11 @@
     </div>
     <div class="form-row"><label>Interesse / Produto</label><input id="f-interesse" placeholder="Ex: Resina epoxi cristal, 10kg/mês"></div>
     <div class="form-row"><label>Data do último contato</label><input type="date" id="f-data"></div>
+    <div class="form-row"><label for="f-proximo">Próximo contato (opcional)</label><input type="date" id="f-proximo" max="9999-12-31"></div>
     <div class="form-row"><label>Notas</label><textarea id="f-notas" placeholder="Observações, objeções, próximos passos..."></textarea></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveLead()">Salvar</button>
+      <button class="btn btn-primary" id="save-lead-btn" onclick="saveLead()">Salvar</button>
     </div>
   </div>
 </div>
@@ -336,16 +348,48 @@ const STATUS_KEY = {'Prospect':'Prospect','Primeiro contato':'Primeiro','Em cont
 
 let db, auth, currentUser, leadsRef, activityRef, presenceRef;
 let leads = {}, editingId = null, currentTab = 'leads';
+let savingLead = false;
+const pendingContacts = new Set();
+const pendingSchedules = new Set();
+const pendingDeletes = new Set();
 
 function initials(n) { return (n||'?').split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase().slice(0,2); }
 function avatarColor(n) { let h=0; for(let c of (n||'?')) h+=c.charCodeAt(0); return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
 function fmtDate(d) { if(!d) return '—'; const[y,m,dd]=d.split('-'); return `${dd}/${m}`; }
+function validContactDate(value) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(value||''))return false;
+  const date=new Date(value+'T00:00:00Z');
+  return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value;
+}
+function todayLocalISO() {
+  const date=new Date();
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+function nextContactBadge(value) {
+  if(!validContactDate(value))return '—';
+  const today=todayLocalISO(),[year,month,day]=value.split('-');
+  const label=value<today?'Atrasado':value===today?'Hoje':'Agendado';
+  const cls=value<today?'days-late':value===today?'days-warn':'days-ok';
+  return `<span class="days-badge ${cls}">${label} · ${day}/${month}/${year}</span>`;
+}
 function daysSince(d) { if(!d) return null; return Math.floor((new Date()-new Date(d))/(1000*60*60*24)); }
 function daysBadge(d) {
   const n = daysSince(d);
   if(n===null) return '—';
   const cls = n<=3?'days-ok':n<=7?'days-warn':'days-late';
   return `<span class="days-badge ${cls}">${n}d</span>`;
+}
+function escapeHTML(value) {
+  return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+function activityHTML(value) {
+  const template=document.createElement('template');template.innerHTML=String(value??'');
+  const render=nodes=>Array.from(nodes).map(node=>{
+    if(node.nodeType===Node.TEXT_NODE)return escapeHTML(node.textContent);
+    if(node.nodeType===Node.ELEMENT_NODE&&node.tagName==='STRONG')return `<strong>${render(node.childNodes)}</strong>`;
+    return node.nodeType===Node.ELEMENT_NODE?escapeHTML(node.outerHTML):'';
+  }).join('');
+  return render(template.content.childNodes);
 }
 function igUrl(h) { if(!h) return null; const s=h.replace('@','').trim(); return s?`https://instagram.com/${s}`:null; }
 function waUrl(w) { if(!w) return null; const n=w.replace(/\D/g,''); return n?`https://wa.me/${n}`:null; }
@@ -400,10 +444,16 @@ function getFiltered() {
   const q=(document.getElementById('search')||{}).value?.toLowerCase()||'';
   const fs=(document.getElementById('filter-status')||{}).value||'';
   const fg=(document.getElementById('filter-seg')||{}).value||'';
+  const agenda=document.getElementById('filter-agenda').value;
+  const today=todayLocalISO();
   return Object.entries(leads).filter(([id,l])=>{
     if(q&&!l.nome?.toLowerCase().includes(q)&&!l.ig?.toLowerCase().includes(q)&&!l.seg?.toLowerCase().includes(q))return false;
     if(fs&&l.status!==fs)return false;
     if(fg&&l.seg!==fg)return false;
+    const scheduled=validContactDate(l.proximoContato);
+    if(agenda==='pendente'&&(!scheduled||l.proximoContato>today))return false;
+    if(agenda==='futuro'&&(!scheduled||l.proximoContato<=today))return false;
+    if(agenda==='sem'&&scheduled)return false;
     return true;
   }).map(([id,l])=>({...l,id}));
 }
@@ -427,32 +477,44 @@ function renderStats() {
 function renderSegFilter() {
   const segs=[...new Set(Object.values(leads).map(l=>l.seg))].filter(Boolean).sort();
   const sel=document.getElementById('filter-seg');const cur=sel?.value||'';
-  if(sel)sel.innerHTML='<option value="">Todos os segmentos</option>'+segs.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+  if(sel)sel.replaceChildren(new Option('Todos os segmentos',''),...segs.map(s=>new Option(s,s,false,s===cur)));
+}
+
+function compareNextContact(a,b) {
+  const scheduledA=validContactDate(a.proximoContato),scheduledB=validContactDate(b.proximoContato);
+  if(scheduledA!==scheduledB)return scheduledA?-1:1;
+  if(scheduledA&&a.proximoContato!==b.proximoContato)return a.proximoContato<b.proximoContato?-1:1;
+  return (a.nome||'').localeCompare(b.nome||'','pt-BR',{sensitivity:'base'})||String(a.id).localeCompare(String(b.id));
 }
 
 function renderTable() {
-  const fl=getFiltered().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+  const order=document.getElementById('order-leads').value;
+  const fl=getFiltered().sort(order==='proximo'?compareNextContact:(a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
   const tb=document.getElementById('tbody');if(!tb)return;
-  if(!fl.length){tb.innerHTML=`<tr><td colspan="8"><div class="empty">Nenhum lead encontrado.</div></td></tr>`;return;}
+  if(!fl.length){tb.innerHTML=`<tr><td colspan="9"><div class="empty">Nenhum lead encontrado.</div></td></tr>`;return;}
   tb.innerHTML=fl.map(l=>{
     const av=avatarColor(l.nome);const bkey=STATUS_KEY[l.status]||'Prospect';
     const igH=igUrl(l.ig);const waH=waUrl(l.wa);
     return`<tr>
       <td><div class="name-cell">
-        <div class="avatar" style="background:${av.bg};color:${av.tx}">${initials(l.nome)}</div>
-        <div><div>${l.nome||'—'}</div>
+        <div class="avatar" style="background:${av.bg};color:${av.tx}">${escapeHTML(initials(l.nome))}</div>
+        <div><div>${escapeHTML(l.nome||'—')}</div>
         <div style="display:flex;gap:6px;margin-top:2px">
-          ${igH?`<a class="ig-link" href="${igH}" target="_blank">${l.ig}</a>`:''}
-          ${waH?`<a class="wa-link" href="${waH}" target="_blank">WhatsApp</a>`:''}
+          ${igH?`<a class="ig-link" href="${escapeHTML(igH)}" target="_blank">${escapeHTML(l.ig)}</a>`:''}
+          ${waH?`<a class="wa-link" href="${escapeHTML(waH)}" target="_blank">WhatsApp</a>`:''}
         </div></div>
       </div></td>
-      <td>${l.seg||'—'}</td>
-      <td><span class="badge b-${bkey}">${l.status}</span></td>
-      <td>${l.interesse||'—'}</td>
-      <td style="font-size:12px;color:var(--text2)">${l.owner||'—'}</td>
-      <td>${fmtDate(l.data)}</td>
-      <td>${daysBadge(l.data)}</td>
-      <td><button class="btn btn-sm" onclick="openModal('${l.id}')">Editar</button> <button class="btn btn-sm btn-danger" onclick="deleteLead('${l.id}')">✕</button></td>
+      <td>${escapeHTML(l.seg||'—')}</td>
+      <td><span class="badge b-${bkey}">${escapeHTML(l.status)}</span></td>
+      <td>${escapeHTML(l.interesse||'—')}</td>
+      <td style="font-size:12px;color:var(--text2)">${escapeHTML(l.owner||'—')}</td>
+      <td class="last-contact">${escapeHTML(fmtDate(l.data))}</td>
+      <td class="days-idle">${daysBadge(l.data)}</td>
+      <td class="next-contact">${nextContactBadge(l.proximoContato)}</td>
+      <td><button class="btn btn-sm" onclick="openModal('${l.id}')" ${pendingDeletes.has(l.id)?'disabled':''}>Editar</button>
+      <button class="btn btn-sm" data-contact-id="${l.id}" onclick="recordContact('${l.id}')" ${pendingContacts.has(l.id)||pendingDeletes.has(l.id)||l.data===todayLocalISO()?'disabled':''} title="${l.data===todayLocalISO()?'Contato já registrado hoje':'Registrar contato realizado sem alterar o próximo agendamento'}">${pendingContacts.has(l.id)?'Registrando...':'Contato feito hoje'}</button>
+      ${canCompleteSchedule(l)?`<button class="btn btn-sm" data-complete-schedule-id="${l.id}" onclick="completeSchedule('${l.id}')" ${pendingSchedules.has(l.id)||pendingDeletes.has(l.id)?'disabled':''} title="Remover o agendamento de hoje ou atrasado após o contato realizado">${pendingSchedules.has(l.id)?'Concluindo...':'Concluir agendamento'}</button>`:''}
+      <button class="btn btn-sm btn-danger" data-delete-id="${l.id}" onclick="deleteLead('${l.id}')" ${pendingDeletes.has(l.id)||pendingContacts.has(l.id)||pendingSchedules.has(l.id)?'disabled':''} aria-label="Remover lead">${pendingDeletes.has(l.id)?'Removendo...':'✕'}</button></td>
     </tr>`;
   }).join('');
 }
@@ -467,11 +529,12 @@ function renderKanban() {
         const igH=igUrl(l.ig);const d=daysSince(l.data);
         const dc=d===null?'':d<=3?'var(--green-text)':d<=7?'var(--amber-text)':'var(--red-mid)';
         return`<div class="kcard" onclick="openModal('${l.id}')">
-          <div class="kcard-name">${l.nome||'—'}</div>
-          <div class="kcard-seg">${l.seg||''}</div>
-          ${l.notas?`<div class="kcard-nota">${l.notas}</div>`:''}
+          <div class="kcard-name">${escapeHTML(l.nome||'—')}</div>
+          <div class="kcard-seg">${escapeHTML(l.seg||'')}</div>
+          ${l.notas?`<div class="kcard-nota">${escapeHTML(l.notas)}</div>`:''}
+          ${validContactDate(l.proximoContato)?`<div class="kcard-next">Próximo contato: ${nextContactBadge(l.proximoContato)}</div>`:''}
           <div class="kcard-footer">
-            ${igH?`<a class="kcard-ig" href="${igH}" target="_blank" onclick="event.stopPropagation()">${l.ig}</a>`:'<span></span>'}
+            ${igH?`<a class="kcard-ig" href="${escapeHTML(igH)}" target="_blank" onclick="event.stopPropagation()">${escapeHTML(l.ig)}</a>`:'<span></span>'}
             ${d!==null?`<span style="font-size:10px;color:${dc};font-weight:500">${d}d</span>`:''}
           </div>
         </div>`;
@@ -483,28 +546,37 @@ function renderKanban() {
 function renderActivity(items) {
   const el=document.getElementById('activity-list');if(!el)return;
   if(!items.length){el.innerHTML='<div class="empty">Nenhuma atividade ainda.</div>';return;}
-  el.innerHTML=items.map(a=>`<div class="activity-item"><span class="activity-who">${a.who}</span> ${a.action}<span style="float:right;color:var(--text3)">${new Date(a.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('');
+  el.innerHTML=items.map(a=>`<div class="activity-item"><span class="activity-who">${escapeHTML(a.who)}</span> ${activityHTML(a.action)}<span style="float:right;color:var(--text3)">${new Date(a.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('');
 }
 
 function openModal(id=null) {
+  if(savingLead||pendingDeletes.has(id))return;
   editingId=id;const l=id?(leads[id]||{}):{};
   document.getElementById('modal-title').textContent=id?'Editar lead':'Novo lead';
   document.getElementById('f-nome').value=l.nome||'';
   document.getElementById('f-ig').value=l.ig||'';
   document.getElementById('f-wa').value=l.wa||'';
   document.getElementById('f-cidade').value=l.cidade||'';
-  document.getElementById('f-seg').value=l.seg||'Artesanato/Ateliê';
+  const segment=document.getElementById('f-seg');
+  if(l.seg&&!Array.from(segment.options).some(option=>option.value===l.seg))segment.add(new Option(l.seg,l.seg));
+  segment.value=l.seg||'Artesanato/Ateliê';
   document.getElementById('f-status').value=l.status||'Prospect';
   document.getElementById('f-interesse').value=l.interesse||'';
   document.getElementById('f-data').value=l.data||new Date().toISOString().slice(0,10);
+  document.getElementById('f-proximo').value=validContactDate(l.proximoContato)?l.proximoContato:'';
   document.getElementById('f-notas').value=l.notas||'';
   document.getElementById('modal-overlay').classList.add('open');
 }
-function closeModal(){document.getElementById('modal-overlay').classList.remove('open');editingId=null;}
+function closeModal(force=false){if(savingLead&&!force)return;document.getElementById('modal-overlay').classList.remove('open');editingId=null;}
 
 async function saveLead() {
+  if(savingLead)return;
   const nome=document.getElementById('f-nome').value.trim()||'Sem nome';
   const ig=document.getElementById('f-ig').value.trim();
+  const proximoContato=document.getElementById('f-proximo').value;
+  if(proximoContato&&!validContactDate(proximoContato)){
+    alert('Informe uma data válida para o próximo contato.');return;
+  }
 
   // Verificação anti-duplicata pelo @Instagram
   if (ig) {
@@ -521,21 +593,88 @@ async function saveLead() {
   }
   const oldStatus=editingId?leads[editingId]?.status:null;
   const newStatus=document.getElementById('f-status').value;
-  const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
+  const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,proximoContato,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
   const who=currentUser.displayName||currentUser.email.split('@')[0];
-  if(editingId){await leadsRef.child(editingId).update(data);logActivity(who,oldStatus!==newStatus?`atualizou <strong>${nome}</strong> para ${newStatus}`:`editou <strong>${nome}</strong>`);}
-  else{const r=leadsRef.push();data.createdAt=Date.now();await r.set(data);logActivity(who,`adicionou <strong>${nome}</strong> como ${newStatus}`);}
-  closeModal();
+  savingLead=true;
+  const controls=Array.from(document.getElementById('modal-overlay').querySelectorAll('input,select,textarea,button')).map(el=>({el,disabled:el.disabled}));
+  controls.forEach(({el})=>el.disabled=true);
+  const button=document.getElementById('save-lead-btn'),label=button.textContent;button.textContent='Salvando...';
+  try {
+    const id=editingId||leadsRef.push().key,activityId=activityRef.push().key,updates={},ts=data.updatedAt;
+    if(editingId){for(const [key,value] of Object.entries(data))updates[`leads/${id}/${key}`]=value;}
+    else{data.createdAt=ts;updates[`leads/${id}`]=data;}
+    const action=editingId?(oldStatus!==newStatus?`atualizou <strong>${escapeHTML(nome)}</strong> para ${escapeHTML(newStatus)}`:`editou <strong>${escapeHTML(nome)}</strong>`):`adicionou <strong>${escapeHTML(nome)}</strong> como ${escapeHTML(newStatus)}`;
+    updates[`activity/${activityId}`]={who,action,ts};
+    await db.ref().update(updates);
+    closeModal(true);
+  } catch(error) {
+    alert('Não foi possível salvar o lead. Tente novamente.');
+  } finally {
+    savingLead=false;controls.forEach(({el,disabled})=>el.disabled=disabled);button.textContent=label;
+  }
 }
 
 async function deleteLead(id) {
-  const nome=leads[id]?.nome||'lead';
+  const lead=leads[id];
+  if(!lead||savingLead||pendingDeletes.has(id)||pendingContacts.has(id)||pendingSchedules.has(id))return;
+  const nome=lead.nome||'lead';
   if(!confirm(`Remover "${nome}"?`))return;
-  await leadsRef.child(id).remove();
-  logActivity(currentUser.displayName||currentUser.email.split('@')[0],`removeu <strong>${nome}</strong>`);
+  pendingDeletes.add(id);renderTable();
+  try {
+    const activityId=activityRef.push().key,ts=Date.now(),updates={};
+    updates[`leads/${id}`]=null;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`removeu <strong>${escapeHTML(nome)}</strong>`,ts};
+    await db.ref().update(updates);
+  } catch(error) {
+    alert('Não foi possível remover o lead. Tente novamente.');
+  } finally {
+    pendingDeletes.delete(id);renderTable();
+  }
 }
 
-function logActivity(who,action){activityRef.push({who,action,ts:Date.now()});}
+async function recordContact(id) {
+  const lead=leads[id],today=todayLocalISO();
+  if(!lead||pendingDeletes.has(id)||pendingContacts.has(id)||lead.data===today)return;
+  if(!confirm(`Registrar que o contato com "${lead.nome||'este lead'}" foi realizado hoje? O próximo agendamento será mantido.`))return;
+  pendingContacts.add(id);renderTable();
+  try {
+    const name=document.createElement('span');name.textContent=lead.nome||'lead';
+    const activityId=activityRef.push().key,ts=Date.now();
+    const updates={};
+    updates[`leads/${id}/data`]=today;
+    updates[`leads/${id}/updatedAt`]=ts;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`registrou contato realizado hoje com <strong>${name.innerHTML}</strong>`,ts};
+    await db.ref().update(updates);
+  } catch(error) {
+    alert('Não foi possível registrar o contato. Tente novamente.');
+  } finally {
+    pendingContacts.delete(id);renderTable();
+  }
+}
+
+function canCompleteSchedule(lead) {
+  const today=todayLocalISO();
+  return !!lead&&lead.data===today&&validContactDate(lead.proximoContato)&&lead.proximoContato<=today;
+}
+
+async function completeSchedule(id) {
+  const lead=leads[id];
+  if(!canCompleteSchedule(lead)||pendingDeletes.has(id)||pendingSchedules.has(id)||pendingContacts.has(id))return;
+  if(!confirm(`Concluir o agendamento de "${lead.nome||'este lead'}"? A data de próximo contato será removida. O contato realizado hoje será preservado.`))return;
+  pendingSchedules.add(id);renderTable();
+  try {
+    const name=document.createElement('span');name.textContent=lead.nome||'lead';
+    const activityId=activityRef.push().key,ts=Date.now(),updates={};
+    updates[`leads/${id}/proximoContato`]='';
+    updates[`leads/${id}/updatedAt`]=ts;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`concluiu o agendamento de <strong>${name.innerHTML}</strong>`,ts};
+    await db.ref().update(updates);
+  } catch(error) {
+    alert('Não foi possível concluir o agendamento. Tente novamente.');
+  } finally {
+    pendingSchedules.delete(id);renderTable();
+  }
+}
 
 function switchTab(t) {
   currentTab=t;
@@ -543,6 +682,7 @@ function switchTab(t) {
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.toggle('active',b.textContent.toLowerCase().includes(labels[t])));
   ['leads','kanban','atividade','estrategia'].forEach(id=>document.getElementById('tab-'+id).style.display=id===t?'block':'none');
   if(t==='kanban')renderKanban();
+  if(t==='leads')renderTable();
 }
 
 document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target===document.getElementById('modal-overlay'))closeModal();});
