@@ -553,3 +553,42 @@ scenario('editar com falha de lead ou atividade conserva rascunho e campos desco
  assert.deepEqual(keys.filter(k=>k.startsWith('leads/')).sort(),leadEditPaths('qa1').sort());
  assert.equal(keys.filter(k=>k.startsWith('activity/')).length,1);assert.equal(keys.length,13);
 });
+
+scenario('exclusao rejeitada por lead ou atividade preserva registros e permite tentar novamente',async p=>{
+ await login(p);const before=await crmState(p),writes=await crmWrites(p);
+ for(const hook of ['__qaFailNextLeadWrite','__qaFailNextActivityWrite']){
+  await p.driver.executeScript('window[arguments[0]]=true',hook);
+  await p.click('[data-delete-id="qa1"]');await p.alert(/Remover/);await p.alert(/Não foi possível remover o lead/);
+  await p.driver.wait(async()=>(await p.element('[data-delete-id="qa1"]')).isEnabled(),10000);
+  assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+  assert.equal(await p.driver.executeScript('return window.__qaAtomicUpdates.length'),0);
+ }
+ await p.click('[data-delete-id="qa1"]');await p.alert(/Remover/);
+ await p.driver.wait(()=>p.driver.executeScript('return !Object.hasOwn(window.__qaDb.leads,"qa1")'),10000);
+ const saved=await crmState(p);assert.deepEqual(saved.leads,{qa2:before.leads.qa2});
+ assert.equal(Object.keys(saved.activity).length,1);assert.match(Object.values(saved.activity)[0].action,/removeu.*Ana QA/);
+});
+scenario('exclusao em espera bloqueia repeticao e edicao e grava remocao com atividade juntas',async p=>{
+ await login(p);const [past]=await contactDates(p);await recordDueContact(p,past);
+ const before=await crmState(p),writes=await crmWrites(p),batches=await p.driver.executeScript('return window.__qaAtomicUpdates.length');
+ await p.driver.executeScript('window.__qaHoldNextLeadWrite=true');
+ await p.click('[data-delete-id="qa1"]');await p.alert(/Remover/);await p.waitText('[data-delete-id="qa1"]','Removendo...');
+ for(const selector of ['[data-delete-id="qa1"]','button[onclick="openModal(\'qa1\')"]','[data-contact-id="qa1"]','[data-complete-schedule-id="qa1"]'])
+  assert.equal(await (await p.element(selector)).isEnabled(),false);
+ await p.click('[data-delete-id="qa1"]');assert.deepEqual(await crmWrites(p),writes);
+ await p.click('button[onclick="switchTab(\'kanban\')"]');
+ await p.click('.kcard');
+ assert.equal(await p.driver.executeScript('return document.getElementById("modal-overlay").classList.contains("open")'),false);
+ assert.deepEqual(await crmState(p),before);
+ await p.click('button[onclick="switchTab(\'leads\')"]');
+ await p.driver.executeScript('window.__qaReleaseLeadWrite()');
+ await p.driver.wait(()=>p.driver.executeScript('return !Object.hasOwn(window.__qaDb.leads,"qa1")'),10000);
+ const saved=await crmState(p);assert.deepEqual(saved.leads,{qa2:before.leads.qa2});
+ for(const [id,activity] of Object.entries(before.activity))assert.deepEqual(saved.activity[id],activity);
+ assert.equal(Object.keys(saved.activity).length,Object.keys(before.activity).length+1);
+ const updates=await p.driver.executeScript('return window.__qaAtomicUpdates');assert.equal(updates.length,batches+1);
+ const last=updates.at(-1),keys=Object.keys(last).sort();
+ assert.equal(last['leads/qa1'],null);assert.equal(keys.length,2);
+ assert.equal(keys.filter(k=>k.startsWith('activity/')).length,1);
+ assert.match(Object.values(saved.activity).at(-1).action,/removeu.*Ana QA/);
+});

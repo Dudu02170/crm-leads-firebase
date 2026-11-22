@@ -11,7 +11,7 @@
 - Editar um lead com segmento legado fora das opções fixas preserva esse valor. Voltar à tabela após editar no funil mostra o valor atualizado.
 
 ## Como testar
-`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e oito cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
+`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Trinta cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
 
 ## Dependência e limites
 Parte da branch `qa/test-automation`, do PR #1 ainda aberto. Revisar/integrar a suíte antes de retargetar a funcionalidade para main, sem duplicar commits, merge automático ou force-push. Não há AGENTS.md no checkout nem nos diretórios ancestrais consultados.
@@ -51,4 +51,11 @@ Entregue: criação/edição e atividade em uma única atualização multipath. 
 
 Aceitação: dois cenários Selenium novos (total 28) cobrem rejeição da atividade no cadastro sem criar lead parcial, preservação do rascunho, espera/repetição/cancelamento bloqueados, retry criando exatamente um lead/atividade; edição com falhas de lead/atividade conserva todo o estado e rascunho, depois salva campos específicos e mantém campo legado/createdAt/outro lead. O adaptador de Firebase não foi alterado. As 26 regressões anteriores continuam; quatro asserções de caminhos/contagem passam a medir os campos e o lote próprios da ação, sem remover verificações de dados.
 
-Limites: contrato atômico simulado em memória, não valida regras/SDK/eventos otimistas/concorrência reais. Não deduplica clientes e não oferece transação condicional em servidor. Exclusão continua no fluxo anterior e não foi incluída nesta correção. Próxima validação: Firebase Emulator para permissões e rejeições do lote. Executar cd qa && npm install && npm test, com Node 22 e Chrome; resultado final no PR #2/Actions.
+Limites: contrato atômico simulado em memória, não valida regras/SDK/eventos otimistas/concorrência reais. Não deduplica clientes e não oferece transação condicional em servidor. A exclusão foi tratada separadamente em QA-CRM-004 abaixo. Próxima validação: Firebase Emulator para permissões e rejeições do lote. Executar cd qa && npm install && npm test, com Node 22 e Chrome; resultado final no PR #2/Actions.
+
+## QA-CRM-004 — Exclusão parcial sem atividade e sem tratamento de falha
+Reconfirmado por inspeção em 425ada3: deleteLead aguarda remove do lead, depois chama o histórico sem aguardar; falha de atividade pode deixar o lead removido sem registro, e rejeição da remoção não apresenta recuperação na UI. Exclusão passa a enviar leads/id=null e atividade na mesma atualização multipath, reservando a chave antes de gravar.
+
+Aceitação: manter confirmação/cancelamento existente; rejeição de lead ou atividade preserva todos os dados e permite nova tentativa. Durante espera, Removendo... bloqueia repetição e ações sobre o mesmo lead; funil não abre editor desse lead. Outros leads/atividades permanecem iguais. Sucesso remove exatamente o escolhido e acrescenta uma atividade no mesmo lote de dois caminhos. Dois novos cenários Selenium, total vigente 30, com hooks existentes e adaptador inalterado. As 28 regressões anteriores permanecem sem alteração. Erro apresenta mensagem e reabilita ações.
+
+Limites: atomização do contrato simulado em memória, não teste de Firebase real, regras, concorrência entre clientes ou exclusão condicional em servidor. O bloqueio é local. Não apaga histórico anterior nem realiza mensagens externas. Próxima validação continua sendo Firebase Emulator para regras/rejeições do lote e persistência real. Como testar: cd qa && npm install && npm test (Node 22 e Chrome); evidência final no PR #2/Actions.

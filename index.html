@@ -351,6 +351,7 @@ let leads = {}, editingId = null, currentTab = 'leads';
 let savingLead = false;
 const pendingContacts = new Set();
 const pendingSchedules = new Set();
+const pendingDeletes = new Set();
 
 function initials(n) { return (n||'?').split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase().slice(0,2); }
 function avatarColor(n) { let h=0; for(let c of (n||'?')) h+=c.charCodeAt(0); return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
@@ -510,10 +511,10 @@ function renderTable() {
       <td class="last-contact">${escapeHTML(fmtDate(l.data))}</td>
       <td class="days-idle">${daysBadge(l.data)}</td>
       <td class="next-contact">${nextContactBadge(l.proximoContato)}</td>
-      <td><button class="btn btn-sm" onclick="openModal('${l.id}')">Editar</button>
-      <button class="btn btn-sm" data-contact-id="${l.id}" onclick="recordContact('${l.id}')" ${pendingContacts.has(l.id)||l.data===todayLocalISO()?'disabled':''} title="${l.data===todayLocalISO()?'Contato já registrado hoje':'Registrar contato realizado sem alterar o próximo agendamento'}">${pendingContacts.has(l.id)?'Registrando...':'Contato feito hoje'}</button>
-      ${canCompleteSchedule(l)?`<button class="btn btn-sm" data-complete-schedule-id="${l.id}" onclick="completeSchedule('${l.id}')" ${pendingSchedules.has(l.id)?'disabled':''} title="Remover o agendamento de hoje ou atrasado após o contato realizado">${pendingSchedules.has(l.id)?'Concluindo...':'Concluir agendamento'}</button>`:''}
-      <button class="btn btn-sm btn-danger" onclick="deleteLead('${l.id}')">✕</button></td>
+      <td><button class="btn btn-sm" onclick="openModal('${l.id}')" ${pendingDeletes.has(l.id)?'disabled':''}>Editar</button>
+      <button class="btn btn-sm" data-contact-id="${l.id}" onclick="recordContact('${l.id}')" ${pendingContacts.has(l.id)||pendingDeletes.has(l.id)||l.data===todayLocalISO()?'disabled':''} title="${l.data===todayLocalISO()?'Contato já registrado hoje':'Registrar contato realizado sem alterar o próximo agendamento'}">${pendingContacts.has(l.id)?'Registrando...':'Contato feito hoje'}</button>
+      ${canCompleteSchedule(l)?`<button class="btn btn-sm" data-complete-schedule-id="${l.id}" onclick="completeSchedule('${l.id}')" ${pendingSchedules.has(l.id)||pendingDeletes.has(l.id)?'disabled':''} title="Remover o agendamento de hoje ou atrasado após o contato realizado">${pendingSchedules.has(l.id)?'Concluindo...':'Concluir agendamento'}</button>`:''}
+      <button class="btn btn-sm btn-danger" data-delete-id="${l.id}" onclick="deleteLead('${l.id}')" ${pendingDeletes.has(l.id)||pendingContacts.has(l.id)||pendingSchedules.has(l.id)?'disabled':''} aria-label="Remover lead">${pendingDeletes.has(l.id)?'Removendo...':'✕'}</button></td>
     </tr>`;
   }).join('');
 }
@@ -549,7 +550,7 @@ function renderActivity(items) {
 }
 
 function openModal(id=null) {
-  if(savingLead)return;
+  if(savingLead||pendingDeletes.has(id))return;
   editingId=id;const l=id?(leads[id]||{}):{};
   document.getElementById('modal-title').textContent=id?'Editar lead':'Novo lead';
   document.getElementById('f-nome').value=l.nome||'';
@@ -614,15 +615,26 @@ async function saveLead() {
 }
 
 async function deleteLead(id) {
-  const nome=leads[id]?.nome||'lead';
+  const lead=leads[id];
+  if(!lead||savingLead||pendingDeletes.has(id)||pendingContacts.has(id)||pendingSchedules.has(id))return;
+  const nome=lead.nome||'lead';
   if(!confirm(`Remover "${nome}"?`))return;
-  await leadsRef.child(id).remove();
-  logActivity(currentUser.displayName||currentUser.email.split('@')[0],`removeu <strong>${escapeHTML(nome)}</strong>`);
+  pendingDeletes.add(id);renderTable();
+  try {
+    const activityId=activityRef.push().key,ts=Date.now(),updates={};
+    updates[`leads/${id}`]=null;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`removeu <strong>${escapeHTML(nome)}</strong>`,ts};
+    await db.ref().update(updates);
+  } catch(error) {
+    alert('Não foi possível remover o lead. Tente novamente.');
+  } finally {
+    pendingDeletes.delete(id);renderTable();
+  }
 }
 
 async function recordContact(id) {
   const lead=leads[id],today=todayLocalISO();
-  if(!lead||pendingContacts.has(id)||lead.data===today)return;
+  if(!lead||pendingDeletes.has(id)||pendingContacts.has(id)||lead.data===today)return;
   if(!confirm(`Registrar que o contato com "${lead.nome||'este lead'}" foi realizado hoje? O próximo agendamento será mantido.`))return;
   pendingContacts.add(id);renderTable();
   try {
@@ -647,7 +659,7 @@ function canCompleteSchedule(lead) {
 
 async function completeSchedule(id) {
   const lead=leads[id];
-  if(!canCompleteSchedule(lead)||pendingSchedules.has(id)||pendingContacts.has(id))return;
+  if(!canCompleteSchedule(lead)||pendingDeletes.has(id)||pendingSchedules.has(id)||pendingContacts.has(id))return;
   if(!confirm(`Concluir o agendamento de "${lead.nome||'este lead'}"? A data de próximo contato será removida. O contato realizado hoje será preservado.`))return;
   pendingSchedules.add(id);renderTable();
   try {
@@ -663,8 +675,6 @@ async function completeSchedule(id) {
     pendingSchedules.delete(id);renderTable();
   }
 }
-
-function logActivity(who,action){activityRef.push({who,action,ts:Date.now()});}
 
 function switchTab(t) {
   currentTab=t;
