@@ -377,6 +377,18 @@ function daysBadge(d) {
   const cls = n<=3?'days-ok':n<=7?'days-warn':'days-late';
   return `<span class="days-badge ${cls}">${n}d</span>`;
 }
+function escapeHTML(value) {
+  return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+function activityHTML(value) {
+  const template=document.createElement('template');template.innerHTML=String(value??'');
+  const render=nodes=>Array.from(nodes).map(node=>{
+    if(node.nodeType===Node.TEXT_NODE)return escapeHTML(node.textContent);
+    if(node.nodeType===Node.ELEMENT_NODE&&node.tagName==='STRONG')return `<strong>${render(node.childNodes)}</strong>`;
+    return node.nodeType===Node.ELEMENT_NODE?escapeHTML(node.outerHTML):'';
+  }).join('');
+  return render(template.content.childNodes);
+}
 function igUrl(h) { if(!h) return null; const s=h.replace('@','').trim(); return s?`https://instagram.com/${s}`:null; }
 function waUrl(w) { if(!w) return null; const n=w.replace(/\D/g,''); return n?`https://wa.me/${n}`:null; }
 
@@ -463,7 +475,7 @@ function renderStats() {
 function renderSegFilter() {
   const segs=[...new Set(Object.values(leads).map(l=>l.seg))].filter(Boolean).sort();
   const sel=document.getElementById('filter-seg');const cur=sel?.value||'';
-  if(sel)sel.innerHTML='<option value="">Todos os segmentos</option>'+segs.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+  if(sel)sel.replaceChildren(new Option('Todos os segmentos',''),...segs.map(s=>new Option(s,s,false,s===cur)));
 }
 
 function compareNextContact(a,b) {
@@ -483,18 +495,18 @@ function renderTable() {
     const igH=igUrl(l.ig);const waH=waUrl(l.wa);
     return`<tr>
       <td><div class="name-cell">
-        <div class="avatar" style="background:${av.bg};color:${av.tx}">${initials(l.nome)}</div>
-        <div><div>${l.nome||'—'}</div>
+        <div class="avatar" style="background:${av.bg};color:${av.tx}">${escapeHTML(initials(l.nome))}</div>
+        <div><div>${escapeHTML(l.nome||'—')}</div>
         <div style="display:flex;gap:6px;margin-top:2px">
-          ${igH?`<a class="ig-link" href="${igH}" target="_blank">${l.ig}</a>`:''}
-          ${waH?`<a class="wa-link" href="${waH}" target="_blank">WhatsApp</a>`:''}
+          ${igH?`<a class="ig-link" href="${escapeHTML(igH)}" target="_blank">${escapeHTML(l.ig)}</a>`:''}
+          ${waH?`<a class="wa-link" href="${escapeHTML(waH)}" target="_blank">WhatsApp</a>`:''}
         </div></div>
       </div></td>
-      <td>${l.seg||'—'}</td>
-      <td><span class="badge b-${bkey}">${l.status}</span></td>
-      <td>${l.interesse||'—'}</td>
-      <td style="font-size:12px;color:var(--text2)">${l.owner||'—'}</td>
-      <td class="last-contact">${fmtDate(l.data)}</td>
+      <td>${escapeHTML(l.seg||'—')}</td>
+      <td><span class="badge b-${bkey}">${escapeHTML(l.status)}</span></td>
+      <td>${escapeHTML(l.interesse||'—')}</td>
+      <td style="font-size:12px;color:var(--text2)">${escapeHTML(l.owner||'—')}</td>
+      <td class="last-contact">${escapeHTML(fmtDate(l.data))}</td>
       <td class="days-idle">${daysBadge(l.data)}</td>
       <td class="next-contact">${nextContactBadge(l.proximoContato)}</td>
       <td><button class="btn btn-sm" onclick="openModal('${l.id}')">Editar</button>
@@ -515,12 +527,12 @@ function renderKanban() {
         const igH=igUrl(l.ig);const d=daysSince(l.data);
         const dc=d===null?'':d<=3?'var(--green-text)':d<=7?'var(--amber-text)':'var(--red-mid)';
         return`<div class="kcard" onclick="openModal('${l.id}')">
-          <div class="kcard-name">${l.nome||'—'}</div>
-          <div class="kcard-seg">${l.seg||''}</div>
-          ${l.notas?`<div class="kcard-nota">${l.notas}</div>`:''}
+          <div class="kcard-name">${escapeHTML(l.nome||'—')}</div>
+          <div class="kcard-seg">${escapeHTML(l.seg||'')}</div>
+          ${l.notas?`<div class="kcard-nota">${escapeHTML(l.notas)}</div>`:''}
           ${validContactDate(l.proximoContato)?`<div class="kcard-next">Próximo contato: ${nextContactBadge(l.proximoContato)}</div>`:''}
           <div class="kcard-footer">
-            ${igH?`<a class="kcard-ig" href="${igH}" target="_blank" onclick="event.stopPropagation()">${l.ig}</a>`:'<span></span>'}
+            ${igH?`<a class="kcard-ig" href="${escapeHTML(igH)}" target="_blank" onclick="event.stopPropagation()">${escapeHTML(l.ig)}</a>`:'<span></span>'}
             ${d!==null?`<span style="font-size:10px;color:${dc};font-weight:500">${d}d</span>`:''}
           </div>
         </div>`;
@@ -532,7 +544,7 @@ function renderKanban() {
 function renderActivity(items) {
   const el=document.getElementById('activity-list');if(!el)return;
   if(!items.length){el.innerHTML='<div class="empty">Nenhuma atividade ainda.</div>';return;}
-  el.innerHTML=items.map(a=>`<div class="activity-item"><span class="activity-who">${a.who}</span> ${a.action}<span style="float:right;color:var(--text3)">${new Date(a.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('');
+  el.innerHTML=items.map(a=>`<div class="activity-item"><span class="activity-who">${escapeHTML(a.who)}</span> ${activityHTML(a.action)}<span style="float:right;color:var(--text3)">${new Date(a.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span></div>`).join('');
 }
 
 function openModal(id=null) {
@@ -579,8 +591,8 @@ async function saveLead() {
   const newStatus=document.getElementById('f-status').value;
   const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,proximoContato,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
   const who=currentUser.displayName||currentUser.email.split('@')[0];
-  if(editingId){await leadsRef.child(editingId).update(data);logActivity(who,oldStatus!==newStatus?`atualizou <strong>${nome}</strong> para ${newStatus}`:`editou <strong>${nome}</strong>`);}
-  else{const r=leadsRef.push();data.createdAt=Date.now();await r.set(data);logActivity(who,`adicionou <strong>${nome}</strong> como ${newStatus}`);}
+  if(editingId){await leadsRef.child(editingId).update(data);logActivity(who,oldStatus!==newStatus?`atualizou <strong>${escapeHTML(nome)}</strong> para ${escapeHTML(newStatus)}`:`editou <strong>${escapeHTML(nome)}</strong>`);}
+  else{const r=leadsRef.push();data.createdAt=Date.now();await r.set(data);logActivity(who,`adicionou <strong>${escapeHTML(nome)}</strong> como ${escapeHTML(newStatus)}`);}
   closeModal();
 }
 
@@ -588,7 +600,7 @@ async function deleteLead(id) {
   const nome=leads[id]?.nome||'lead';
   if(!confirm(`Remover "${nome}"?`))return;
   await leadsRef.child(id).remove();
-  logActivity(currentUser.displayName||currentUser.email.split('@')[0],`removeu <strong>${nome}</strong>`);
+  logActivity(currentUser.displayName||currentUser.email.split('@')[0],`removeu <strong>${escapeHTML(nome)}</strong>`);
 }
 
 async function recordContact(id) {

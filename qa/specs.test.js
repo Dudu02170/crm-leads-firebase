@@ -458,3 +458,51 @@ scenario('conclusao aparece somente com contato hoje e agenda de hoje ou atrasad
  await (await completionButton(p)).click();await p.alert(/data de próximo contato será removida/);await waitScheduleCompleted(p);
  assert.equal(await absent(),true);assert.equal((await crmState(p)).leads.qa1.data,today);
 });
+
+scenario('textos com marcacao permanecem literais na tabela funil filtro e atividade',async p=>{
+ await login(p);const original=await crmState(p);
+ const name='<span id="qa-name-mark">Ana & QA</span>',notes='<em id="qa-note-mark">Retorno & QA</em>';
+ const interest='<img id="qa-interest-mark" src="qa-invalid">',segment='Linha "QA" <Especial> & Resina';
+ const instagram='@qa" data-qa-mark="unexpected';
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ await p.fill('#f-nome',name);await p.fill('#f-notas',notes);await p.fill('#f-interesse',interest);await p.fill('#f-ig',instagram);
+ // A legacy segment is prepared as a selectable value in the real editor, not as rendered HTML.
+ await p.driver.executeScript('document.getElementById("f-seg").add(new Option(arguments[0],arguments[0],false,true))',segment);
+ await saveModal(p);
+ const saved=await crmState(p),writes=await crmWrites(p);
+ assert.equal(saved.leads.qa1.nome,name);assert.equal(saved.leads.qa1.notas,notes);
+ assert.equal(saved.leads.qa1.seg,segment);assert.equal(saved.leads.qa1.interesse,interest);
+ assert.deepEqual(saved.leads.qa2,original.leads.qa2);
+ assert.match(await p.text('#tbody'),new RegExp('Ana & QA'));
+ const edit=await p.element('button[onclick="openModal(\'qa1\')"]');
+ const row=await p.driver.executeScript('return arguments[0].closest("tr").textContent',edit);
+ assert.ok(row.includes(name));assert.ok(row.includes(interest));assert.ok(row.includes(segment));assert.ok(row.includes(instagram));
+ const clean=()=>p.driver.executeScript('return document.querySelectorAll("#qa-name-mark,#qa-note-mark,#qa-interest-mark,[data-qa-mark]").length===0');
+ assert.equal(await clean(),true,'campos não podem criar elementos ou atributos');
+ await p.select('#filter-seg',segment);assert.equal(await (await p.element('#filter-seg')).getAttribute('value'),segment);
+ await p.click('button[onclick="switchTab(\'kanban\')"]');
+ assert.equal(await p.text('.kcard-name'),name);assert.equal(await p.text('.kcard-nota'),notes);
+ assert.equal(await clean(),true);
+ await p.click('button[onclick="switchTab(\'atividade\')"]');
+ assert.equal(await p.text('#activity-list strong'),name);assert.equal(await clean(),true);
+ await p.click('button[onclick="switchTab(\'leads\')"]');
+ await p.click('button[onclick="openModal(\'qa1\')"]');
+ assert.equal(await (await p.element('#f-nome')).getAttribute('value'),name);
+ assert.equal(await (await p.element('#f-notas')).getAttribute('value'),notes);
+ assert.equal(await (await p.element('#f-seg')).getAttribute('value'),segment);
+ await p.click('button[onclick="closeModal()"]');
+ assert.deepEqual(await crmState(p),saved);assert.deepEqual(await crmWrites(p),writes,'consultar não regrava valores escapados');
+});
+
+scenario('atividade legada conserva negrito sem inserir outros elementos ou atributos',async p=>{
+ await login(p);
+ const who='<span id="qa-who-mark">Pessoa & QA</span>';
+ const action='editou <strong data-qa-unsafe="yes">Nome &amp; QA</strong> <span id="qa-legacy-mark">literal</span>';
+ await p.driver.executeScript('firebase.database().ref("activity").push({who:arguments[0],action:arguments[1],ts:Date.now()})',who,action);
+ const before=await crmState(p),writes=await crmWrites(p);
+ await p.click('button[onclick="switchTab(\'atividade\')"]');
+ assert.equal(await p.text('.activity-who'),who);assert.equal(await p.text('#activity-list strong'),'Nome & QA');
+ assert.ok((await p.text('#activity-list')).includes('<span id="qa-legacy-mark">literal</span>'));
+ assert.equal(await p.driver.executeScript('return document.querySelectorAll("#qa-who-mark,#qa-legacy-mark,[data-qa-unsafe]").length'),0);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+});

@@ -11,7 +11,7 @@
 - Editar um lead com segmento legado fora das opções fixas preserva esse valor. Voltar à tabela após editar no funil mostra o valor atualizado.
 
 ## Como testar
-`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e quatro cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
+`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e seis cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
 
 ## Dependência e limites
 Parte da branch `qa/test-automation`, do PR #1 ainda aberto. Revisar/integrar a suíte antes de retargetar a funcionalidade para main, sem duplicar commits, merge automático ou force-push. Não há AGENTS.md no checkout nem nos diretórios ancestrais consultados.
@@ -34,3 +34,12 @@ Na tabela, Concluir agendamento aparece somente quando o último contato é hoje
 Aceitação: cancelar não grava; envio bloqueia repetição local; sucesso limpa proximoContato e envia updatedAt/atividade na mesma atualização multipath, sem substituir o lead. Rejeição de lead ou atividade mantém todo o estado e libera nova tentativa no adaptador. Três cenários Selenium adicionais cobrem elegibilidade, confirmação/cancelamento, espera, preservação, falhas e recuperação. Usam os hooks existentes, sem modificar o adaptador ou relaxar as 21 regressões anteriores. Resultado final no PR #2/Actions.
 
 Limites: a atomicidade é o contrato simulado do Firebase em memória; não valida SDK, regras, concorrência ou durabilidade reais. A condição usa o dia local e o estado observado na página; não há deduplicação entre clientes nem transação condicional no servidor. Não remove agenda automaticamente nem realiza contato externo. Próxima validação: Firebase Emulator para regras e rejeições do lote; reagendamento permanece pelo editor.
+
+## QA-CRM-002 — Texto do lead era interpretado como HTML
+Inspeção em 9a066a3: tabela/funil interpolam nome, interesse, notas, segmento e outros textos diretamente em innerHTML; o filtro cria opções por HTML; atividades interpolam autor e ação sem separar texto da formatação. Um nome como <span id="qa-name-mark">Ana & QA</span> cria um elemento em vez de mostrar o valor literal, e aspas no segmento podem alterar o valor do filtro.
+
+Entregue: escape dos campos apresentados, incluindo rótulos/atributos dos links; opções de segmento criadas com Option para preservar valor/seleção. Atividades novas escapam nomes/status interpolados; na apresentação do histórico, somente strong é reconstruído, sem atributos. Outros elementos são mostrados como texto, e o autor é texto. Não migra nem regrava leads/atividades antigos para consultar. Valores dos campos do lead continuam originais no formulário e no adaptador.
+
+Critérios: dois cenários Selenium adicionais preservam a marcação como texto na tabela/funil/filtro/atividade, mantêm valores ao reabrir editor, não criam os elementos/atributos fornecidos e preservam outro lead; atividade legada mantém negrito sem atributos nem inserir outros elementos. Consultar não grava e não altera dados. Mantém os 24 cenários anteriores e o adaptador de Firebase. Total: 26 Selenium, resultado final no PR #2/Actions.
+
+Limites: correção de apresentação dos textos e formato de atividade, não auditoria completa ou validação de URLs/identificadores externos. O parse do histórico usa template inerte e reconstrói apenas strong/texto; não reutiliza os elementos recebidos. Persistência/regras reais continuam fora da suíte; validar no Emulator antes de afirmar integração. Executar: cd qa && npm install && npm test, com Node 22 e Chrome.
