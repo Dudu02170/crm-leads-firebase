@@ -399,3 +399,62 @@ scenario('falha na atividade rejeita o contato inteiro e permite tentar novament
  assert.deepEqual(saved.leads.qa1,{...before.leads.qa1,data:today,updatedAt:saved.leads.qa1.updatedAt});
  assert.deepEqual(saved.leads.qa2,before.leads.qa2);
 });
+
+async function completionButton(p){return p.element('[data-complete-schedule-id="qa1"]');}
+async function recordDueContact(p,date){
+ await schedule(p,'qa1',date);
+ await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);
+ const [,today]=await contactDates(p);await waitContactRecorded(p,'qa1',today);
+}
+async function waitScheduleCompleted(p){
+ await p.driver.wait(()=>p.driver.executeScript('return window.__qaDb.leads.qa1.proximoContato===""'),10000);
+ await p.driver.wait(()=>p.driver.executeScript('return !document.querySelector("[data-complete-schedule-id=qa1]")'),10000);
+}
+scenario('concluir agendamento vencido exige confirmacao e preserva contato e outros leads',async p=>{
+ await login(p);const [past,today]=await contactDates(p);await recordDueContact(p,past);
+ const before=await crmState(p),writes=await crmWrites(p),batches=await p.driver.executeScript('return window.__qaAtomicUpdates.length');
+ await (await completionButton(p)).click();
+ const cancel=await p.driver.wait(until.alertIsPresent(),10000);assert.match(await cancel.getText(),/data de próximo contato será removida/);await cancel.dismiss();
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ await p.driver.executeScript('window.__qaHoldNextLeadWrite=true');
+ await (await completionButton(p)).click();await p.alert(/contato realizado hoje será preservado/);
+ await p.waitText('[data-complete-schedule-id="qa1"]','Concluindo...');
+ assert.equal(await (await completionButton(p)).isEnabled(),false);
+ await (await completionButton(p)).click();assert.deepEqual(await crmWrites(p),writes);
+ await p.driver.executeScript('window.__qaReleaseLeadWrite()');await waitScheduleCompleted(p);
+ const saved=await crmState(p);
+ assert.deepEqual(saved.leads.qa1,{...before.leads.qa1,proximoContato:'',updatedAt:saved.leads.qa1.updatedAt});
+ assert.equal(saved.leads.qa1.data,today);assert.deepEqual(saved.leads.qa2,before.leads.qa2);
+ assert.equal(Object.keys(saved.activity).length,Object.keys(before.activity).length+1);
+ assert.match(Object.values(saved.activity).at(-1).action,/concluiu o agendamento.*Ana QA/);
+ const updates=await p.driver.executeScript('return window.__qaAtomicUpdates');
+ assert.equal(updates.length,batches+1);
+ assert.deepEqual(Object.keys(updates.at(-1)).sort(),['leads/qa1/proximoContato','leads/qa1/updatedAt',Object.keys(updates.at(-1)).find(k=>k.startsWith('activity/'))].sort());
+ assert.equal((await contactCell(p,'qa1')).trim(),'—');
+ await p.select('#filter-agenda','sem');await p.waitText('#tbody','Ana QA');
+});
+scenario('falhas de lead ou atividade preservam agenda e permitem concluir novamente',async p=>{
+ await login(p);const [past]=await contactDates(p);await recordDueContact(p,past);
+ const before=await crmState(p),writes=await crmWrites(p),batches=await p.driver.executeScript('return window.__qaAtomicUpdates.length');
+ for(const hook of ['__qaFailNextLeadWrite','__qaFailNextActivityWrite']){
+  await p.driver.executeScript('window[arguments[0]]=true',hook);
+  await (await completionButton(p)).click();await p.alert(/data de próximo contato será removida/);
+  await p.alert(/Não foi possível concluir o agendamento/);
+  await p.driver.wait(async()=>(await completionButton(p)).isEnabled(),10000);
+  assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+  assert.equal(await p.driver.executeScript('return window.__qaAtomicUpdates.length'),batches);
+ }
+ await (await completionButton(p)).click();await p.alert(/data de próximo contato será removida/);await waitScheduleCompleted(p);
+ assert.deepEqual((await crmState(p)).leads.qa2,before.leads.qa2);
+});
+scenario('conclusao aparece somente com contato hoje e agenda de hoje ou atrasada',async p=>{
+ await login(p);const [past,today,future]=await contactDates(p);
+ const absent=()=>p.driver.executeScript('return document.querySelectorAll("[data-complete-schedule-id]").length===0');
+ assert.equal(await absent(),true);
+ await schedule(p,'qa1',past);assert.equal(await absent(),true,'agenda vencida sem contato hoje não pode ser concluída');
+ await schedule(p,'qa1',future);await (await contactButton(p)).click();await p.alert(/foi realizado hoje/);await waitContactRecorded(p,'qa1',today);
+ assert.equal(await absent(),true,'agenda futura deve ser preservada');
+ await schedule(p,'qa1',today);assert.equal(await (await completionButton(p)).isEnabled(),true);
+ await (await completionButton(p)).click();await p.alert(/data de próximo contato será removida/);await waitScheduleCompleted(p);
+ assert.equal(await absent(),true);assert.equal((await crmState(p)).leads.qa1.data,today);
+});

@@ -349,6 +349,7 @@ const STATUS_KEY = {'Prospect':'Prospect','Primeiro contato':'Primeiro','Em cont
 let db, auth, currentUser, leadsRef, activityRef, presenceRef;
 let leads = {}, editingId = null, currentTab = 'leads';
 const pendingContacts = new Set();
+const pendingSchedules = new Set();
 
 function initials(n) { return (n||'?').split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase().slice(0,2); }
 function avatarColor(n) { let h=0; for(let c of (n||'?')) h+=c.charCodeAt(0); return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
@@ -498,6 +499,7 @@ function renderTable() {
       <td class="next-contact">${nextContactBadge(l.proximoContato)}</td>
       <td><button class="btn btn-sm" onclick="openModal('${l.id}')">Editar</button>
       <button class="btn btn-sm" data-contact-id="${l.id}" onclick="recordContact('${l.id}')" ${pendingContacts.has(l.id)||l.data===todayLocalISO()?'disabled':''} title="${l.data===todayLocalISO()?'Contato já registrado hoje':'Registrar contato realizado sem alterar o próximo agendamento'}">${pendingContacts.has(l.id)?'Registrando...':'Contato feito hoje'}</button>
+      ${canCompleteSchedule(l)?`<button class="btn btn-sm" data-complete-schedule-id="${l.id}" onclick="completeSchedule('${l.id}')" ${pendingSchedules.has(l.id)?'disabled':''} title="Remover o agendamento de hoje ou atrasado após o contato realizado">${pendingSchedules.has(l.id)?'Concluindo...':'Concluir agendamento'}</button>`:''}
       <button class="btn btn-sm btn-danger" onclick="deleteLead('${l.id}')">✕</button></td>
     </tr>`;
   }).join('');
@@ -606,6 +608,30 @@ async function recordContact(id) {
     alert('Não foi possível registrar o contato. Tente novamente.');
   } finally {
     pendingContacts.delete(id);renderTable();
+  }
+}
+
+function canCompleteSchedule(lead) {
+  const today=todayLocalISO();
+  return !!lead&&lead.data===today&&validContactDate(lead.proximoContato)&&lead.proximoContato<=today;
+}
+
+async function completeSchedule(id) {
+  const lead=leads[id];
+  if(!canCompleteSchedule(lead)||pendingSchedules.has(id)||pendingContacts.has(id))return;
+  if(!confirm(`Concluir o agendamento de "${lead.nome||'este lead'}"? A data de próximo contato será removida. O contato realizado hoje será preservado.`))return;
+  pendingSchedules.add(id);renderTable();
+  try {
+    const name=document.createElement('span');name.textContent=lead.nome||'lead';
+    const activityId=activityRef.push().key,ts=Date.now(),updates={};
+    updates[`leads/${id}/proximoContato`]='';
+    updates[`leads/${id}/updatedAt`]=ts;
+    updates[`activity/${activityId}`]={who:currentUser.displayName||currentUser.email.split('@')[0],action:`concluiu o agendamento de <strong>${name.innerHTML}</strong>`,ts};
+    await db.ref().update(updates);
+  } catch(error) {
+    alert('Não foi possível concluir o agendamento. Tente novamente.');
+  } finally {
+    pendingSchedules.delete(id);renderTable();
   }
 }
 
