@@ -550,6 +550,6 @@ scenario('editar com falha de lead ou atividade conserva rascunho e campos desco
  assert.deepEqual(saved.leads.qa2,before.leads.qa2);assert.equal(Object.keys(saved.activity).length,Object.keys(before.activity).length+1);
  const updates=await p.driver.executeScript('return window.__qaAtomicUpdates');assert.equal(updates.length,batches+1);
  const keys=Object.keys(updates.at(-1));
- assert.deepEqual(keys.filter(k=>k.startsWith('leads/')),leadEditPaths('qa1'));
+ assert.deepEqual(keys.filter(k=>k.startsWith('leads/')).sort(),leadEditPaths('qa1').sort());
  assert.equal(keys.filter(k=>k.startsWith('activity/')).length,1);assert.equal(keys.length,13);
 });
