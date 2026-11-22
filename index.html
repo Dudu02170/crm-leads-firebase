@@ -324,7 +324,7 @@
     <div class="form-row"><label>Notas</label><textarea id="f-notas" placeholder="Observações, objeções, próximos passos..."></textarea></div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveLead()">Salvar</button>
+      <button class="btn btn-primary" id="save-lead-btn" onclick="saveLead()">Salvar</button>
     </div>
   </div>
 </div>
@@ -348,6 +348,7 @@ const STATUS_KEY = {'Prospect':'Prospect','Primeiro contato':'Primeiro','Em cont
 
 let db, auth, currentUser, leadsRef, activityRef, presenceRef;
 let leads = {}, editingId = null, currentTab = 'leads';
+let savingLead = false;
 const pendingContacts = new Set();
 const pendingSchedules = new Set();
 
@@ -548,6 +549,7 @@ function renderActivity(items) {
 }
 
 function openModal(id=null) {
+  if(savingLead)return;
   editingId=id;const l=id?(leads[id]||{}):{};
   document.getElementById('modal-title').textContent=id?'Editar lead':'Novo lead';
   document.getElementById('f-nome').value=l.nome||'';
@@ -564,9 +566,10 @@ function openModal(id=null) {
   document.getElementById('f-notas').value=l.notas||'';
   document.getElementById('modal-overlay').classList.add('open');
 }
-function closeModal(){document.getElementById('modal-overlay').classList.remove('open');editingId=null;}
+function closeModal(force=false){if(savingLead&&!force)return;document.getElementById('modal-overlay').classList.remove('open');editingId=null;}
 
 async function saveLead() {
+  if(savingLead)return;
   const nome=document.getElementById('f-nome').value.trim()||'Sem nome';
   const ig=document.getElementById('f-ig').value.trim();
   const proximoContato=document.getElementById('f-proximo').value;
@@ -591,9 +594,23 @@ async function saveLead() {
   const newStatus=document.getElementById('f-status').value;
   const data={nome,ig,wa:document.getElementById('f-wa').value.trim(),seg:document.getElementById('f-seg').value,status:newStatus,interesse:document.getElementById('f-interesse').value.trim(),cidade:document.getElementById('f-cidade').value.trim(),data:document.getElementById('f-data').value,proximoContato,notas:document.getElementById('f-notas').value.trim(),owner:currentUser.displayName||currentUser.email.split('@')[0],updatedAt:Date.now()};
   const who=currentUser.displayName||currentUser.email.split('@')[0];
-  if(editingId){await leadsRef.child(editingId).update(data);logActivity(who,oldStatus!==newStatus?`atualizou <strong>${escapeHTML(nome)}</strong> para ${escapeHTML(newStatus)}`:`editou <strong>${escapeHTML(nome)}</strong>`);}
-  else{const r=leadsRef.push();data.createdAt=Date.now();await r.set(data);logActivity(who,`adicionou <strong>${escapeHTML(nome)}</strong> como ${escapeHTML(newStatus)}`);}
-  closeModal();
+  savingLead=true;
+  const controls=Array.from(document.getElementById('modal-overlay').querySelectorAll('input,select,textarea,button')).map(el=>({el,disabled:el.disabled}));
+  controls.forEach(({el})=>el.disabled=true);
+  const button=document.getElementById('save-lead-btn'),label=button.textContent;button.textContent='Salvando...';
+  try {
+    const id=editingId||leadsRef.push().key,activityId=activityRef.push().key,updates={},ts=data.updatedAt;
+    if(editingId){for(const [key,value] of Object.entries(data))updates[`leads/${id}/${key}`]=value;}
+    else{data.createdAt=ts;updates[`leads/${id}`]=data;}
+    const action=editingId?(oldStatus!==newStatus?`atualizou <strong>${escapeHTML(nome)}</strong> para ${escapeHTML(newStatus)}`:`editou <strong>${escapeHTML(nome)}</strong>`):`adicionou <strong>${escapeHTML(nome)}</strong> como ${escapeHTML(newStatus)}`;
+    updates[`activity/${activityId}`]={who,action,ts};
+    await db.ref().update(updates);
+    closeModal(true);
+  } catch(error) {
+    alert('Não foi possível salvar o lead. Tente novamente.');
+  } finally {
+    savingLead=false;controls.forEach(({el,disabled})=>el.disabled=disabled);button.textContent=label;
+  }
 }
 
 async function deleteLead(id) {

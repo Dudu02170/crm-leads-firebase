@@ -11,7 +11,7 @@
 - Editar um lead com segmento legado fora das opções fixas preserva esse valor. Voltar à tabela após editar no funil mostra o valor atualizado.
 
 ## Como testar
-`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e seis cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
+`cd qa && npm install && npm test` com Node.js 22+ e Chrome. Vinte e oito cenários Selenium, mantendo os onze anteriores. Resultado e logs finais no PR da funcionalidade. Verificações locais: sintaxe do script, sintaxe dos testes, diff --check e helpers reais de validação de calendário.
 
 ## Dependência e limites
 Parte da branch `qa/test-automation`, do PR #1 ainda aberto. Revisar/integrar a suíte antes de retargetar a funcionalidade para main, sem duplicar commits, merge automático ou force-push. Não há AGENTS.md no checkout nem nos diretórios ancestrais consultados.
@@ -43,3 +43,12 @@ Entregue: escape dos campos apresentados, incluindo rótulos/atributos dos links
 Critérios: dois cenários Selenium adicionais preservam a marcação como texto na tabela/funil/filtro/atividade, mantêm valores ao reabrir editor, não criam os elementos/atributos fornecidos e preservam outro lead; atividade legada mantém negrito sem atributos nem inserir outros elementos. Consultar não grava e não altera dados. Mantém os 24 cenários anteriores e o adaptador de Firebase. Total: 26 Selenium, resultado final no PR #2/Actions.
 
 Limites: correção de apresentação dos textos e formato de atividade, não auditoria completa ou validação de URLs/identificadores externos. O parse do histórico usa template inerte e reconstrói apenas strong/texto; não reutiliza os elementos recebidos. Persistência/regras reais continuam fora da suíte; validar no Emulator antes de afirmar integração. Executar: cd qa && npm install && npm test, com Node 22 e Chrome.
+
+## QA-CRM-003 — Salvamento de lead sem atividade e sem tratamento de erro
+Reconfirmado em cf555ea: saveLead grava o lead, chama logActivity sem aguardar o resultado e fecha o modal. Uma falha de atividade deixa criação/edição sem histórico. A função anterior isolada com adaptador mínimo que não persiste a atividade confirmou lead alterado e modal fechado; não foi integração Firebase real.
+
+Entregue: criação/edição e atividade em uma única atualização multipath. Criação reserva chave sem escrita e envia o novo lead/atividade; edição envia os doze campos existentes por caminho, preservando campos desconhecidos e createdAt. Nomes/status continuam escapados nas atividades. Falha mantém modal aberto, rascunho intacto e apresenta erro; nova tentativa é liberada. Enquanto salva, campos e botões do modal ficam desabilitados, com Salvando...; fechamento/troca de lead são bloqueados e só sucesso fecha o formulário.
+
+Aceitação: dois cenários Selenium novos (total 28) cobrem rejeição da atividade no cadastro sem criar lead parcial, preservação do rascunho, espera/repetição/cancelamento bloqueados, retry criando exatamente um lead/atividade; edição com falhas de lead/atividade conserva todo o estado e rascunho, depois salva campos específicos e mantém campo legado/createdAt/outro lead. O adaptador de Firebase não foi alterado. As 26 regressões anteriores continuam; quatro asserções de caminhos/contagem passam a medir os campos e o lote próprios da ação, sem remover verificações de dados.
+
+Limites: contrato atômico simulado em memória, não valida regras/SDK/eventos otimistas/concorrência reais. Não deduplica clientes e não oferece transação condicional em servidor. Exclusão continua no fluxo anterior e não foi incluída nesta correção. Próxima validação: Firebase Emulator para permissões e rejeições do lote. Executar cd qa && npm install && npm test, com Node 22 e Chrome; resultado final no PR #2/Actions.

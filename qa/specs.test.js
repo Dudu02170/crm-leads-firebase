@@ -70,6 +70,7 @@ scenario('cancelar exclusao preserva lead e confirmar remove',async p=>{
 
 const crmState=p=>p.driver.executeScript('return structuredClone({leads:window.__qaDb.leads,activity:window.__qaDb.activity})');
 const crmWrites=p=>p.driver.executeScript("return window.__qaWrites.filter(w=>w.path.startsWith('leads/')||w.path.startsWith('activity/'))");
+const leadEditPaths=id=>['nome','ig','wa','seg','status','interesse','cidade','data','proximoContato','notas','owner','updatedAt'].map(key=>`leads/${id}/${key}`);
 scenario('editar mantendo o proprio instagram atualiza somente o lead escolhido',async p=>{
  await login(p);const original=await crmState(p);
  await p.click('button[onclick="openModal(\'qa1\')"]');
@@ -84,7 +85,7 @@ scenario('editar mantendo o proprio instagram atualiza somente o lead escolhido'
  assert.equal(saved.leads.qa1.cidade,'Cidade QA');assert.equal(saved.leads.qa1.notas,'Retorno fictício combinado');
  assert.equal(saved.leads.qa1.status,original.leads.qa1.status);
  const writes=await crmWrites(p);
- assert.deepEqual(writes.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1']);
+ assert.deepEqual(writes.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),leadEditPaths('qa1'));
  const activity=Object.values(saved.activity);
  assert.equal(activity.length,1);assert.equal(activity[0].who,'Pessoa QA');
  assert.match(activity[0].action,/editou.*Ana Atualizada QA/);
@@ -188,7 +189,7 @@ scenario('proximo contato salva e atualiza tabela e funil preservando outros lea
  assert.match(await contactCell(p,'qa1'),/Agendado/,'voltar do funil deve mostrar a edição atual');
  saved=await crmState(p);assert.equal(saved.leads.qa1.proximoContato,future);
  assert.deepEqual(saved.leads.qa2,original.leads.qa2);assert.equal(Object.keys(saved.leads).length,2);
- assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1','leads/qa1']);
+ assert.deepEqual((await crmWrites(p)).filter(w=>w.path.startsWith('leads/')).map(w=>w.path),[...leadEditPaths('qa1'),...leadEditPaths('qa1')]);
 });
 
 scenario('agenda combina atrasados futuros sem data e filtros existentes sem gravar',async p=>{
@@ -312,7 +313,7 @@ scenario('fila desempata por nome e id e reposiciona somente o lead editado',asy
  const saved=await crmState(p);
  assert.equal(saved.leads.qa2.proximoContato,'');assert.deepEqual(saved.leads[anotherAna],before.leads[anotherAna]);
  const newWrites=(await crmWrites(p)).slice(writes.length).filter(w=>w.path.startsWith('leads/'));
- assert.deepEqual(newWrites.map(w=>w.path),['leads/qa1','leads/qa2']);
+ assert.deepEqual(newWrites.map(w=>w.path),[...leadEditPaths('qa1'),...leadEditPaths('qa2')]);
 });
 
 async function contactButton(p,id='qa1'){return p.element(`[data-contact-id="${id}"]`);}
@@ -324,7 +325,7 @@ async function waitContactRecorded(p,id,today){
 scenario('registrar contato hoje preserva agenda e dados e impede repeticao durante envio',async p=>{
  await login(p);const [,today,future]=await contactDates(p);await schedule(p,'qa1',future);
  await p.select('#order-leads','proximo');
- const before=await crmState(p),writes=await crmWrites(p);
+ const before=await crmState(p),writes=await crmWrites(p),batches=await p.driver.executeScript('return window.__qaAtomicUpdates.length');
  await p.driver.executeScript('window.__qaHoldNextLeadWrite=true');
  await (await contactButton(p)).click();await p.alert(/próximo agendamento será mantido/);
  await p.waitText('[data-contact-id="qa1"]','Registrando...');
@@ -348,7 +349,7 @@ scenario('registrar contato hoje preserva agenda e dados e impede repeticao dura
  assert.equal(activity.at(-1).who,'Pessoa QA');
  const newWrites=(await crmWrites(p)).slice(writes.length);
  assert.deepEqual(newWrites.filter(w=>w.path.startsWith('leads/')).map(w=>w.path),['leads/qa1/data','leads/qa1/updatedAt']);
- assert.equal(await p.driver.executeScript('return window.__qaAtomicUpdates.length'),1,'contato e atividade usam uma única atualização multipath');
+ assert.equal(await p.driver.executeScript('return window.__qaAtomicUpdates.length'),batches+1,'contato e atividade acrescentam uma única atualização multipath');
 });
 
 scenario('cancelar contato preserva lead e confirmar nao inventa proximo agendamento',async p=>{
@@ -505,4 +506,50 @@ scenario('atividade legada conserva negrito sem inserir outros elementos ou atri
  assert.ok((await p.text('#activity-list')).includes('<span id="qa-legacy-mark">literal</span>'));
  assert.equal(await p.driver.executeScript('return document.querySelectorAll("#qa-who-mark,#qa-legacy-mark,[data-qa-unsafe]").length'),0);
  assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+});
+
+scenario('cadastro rejeitado preserva rascunho e repetir durante envio nao duplica lead',async p=>{
+ await login(p);const before=await crmState(p);
+ await p.click('button[onclick="openModal()"]');await p.fill('#f-nome','Cadastro atômico QA');await p.fill('#f-ig','@atomic.qa');
+ await p.driver.executeScript('window.__qaFailNextActivityWrite=true');
+ await p.click('#save-lead-btn');await p.alert(/Não foi possível salvar o lead/);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),[]);
+ assert.equal(await (await p.element('#f-nome')).getAttribute('value'),'Cadastro atômico QA');
+ assert.equal(await (await p.element('#save-lead-btn')).isEnabled(),true);
+ await p.driver.executeScript('window.__qaHoldNextLeadWrite=true');
+ await p.click('#save-lead-btn');await p.waitText('#save-lead-btn','Salvando...');
+ assert.equal(await (await p.element('#f-nome')).isEnabled(),false);
+ assert.equal(await (await p.element('#save-lead-btn')).isEnabled(),false);
+ await p.click('#save-lead-btn');await p.click('#modal-overlay button[onclick="closeModal()"]');
+ assert.equal(await p.driver.executeScript('return document.getElementById("modal-overlay").classList.contains("open")'),true);
+ assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),[]);
+ await p.driver.executeScript('window.__qaReleaseLeadWrite()');
+ await p.driver.wait(()=>p.driver.executeScript('return !document.getElementById("modal-overlay").classList.contains("open")'),10000);
+ const saved=await crmState(p),created=Object.entries(saved.leads).filter(([id])=>!Object.hasOwn(before.leads,id));
+ assert.equal(created.length,1);assert.equal(created[0][1].nome,'Cadastro atômico QA');
+ assert.deepEqual(saved.leads.qa1,before.leads.qa1);assert.deepEqual(saved.leads.qa2,before.leads.qa2);
+ assert.equal(Object.keys(saved.activity).length,1);
+ const updates=await p.driver.executeScript('return window.__qaAtomicUpdates');assert.equal(updates.length,1);
+ assert.deepEqual(Object.keys(updates[0]).sort(),[`leads/${created[0][0]}`,`activity/${Object.keys(saved.activity)[0]}`].sort());
+});
+scenario('editar com falha de lead ou atividade conserva rascunho e campos desconhecidos',async p=>{
+ await login(p);
+ await p.driver.executeScript('firebase.database().ref("leads/qa1").update({campoLegado:"Preservar QA",createdAt:123})');
+ const before=await crmState(p),writes=await crmWrites(p),batches=await p.driver.executeScript('return window.__qaAtomicUpdates.length');
+ await p.click('button[onclick="openModal(\'qa1\')"]');await p.fill('#f-nome','Edição atômica QA');await p.fill('#f-notas','Rascunho preservado QA');
+ for(const hook of ['__qaFailNextLeadWrite','__qaFailNextActivityWrite']){
+  await p.driver.executeScript('window[arguments[0]]=true',hook);await p.click('#save-lead-btn');await p.alert(/Não foi possível salvar o lead/);
+  assert.equal(await (await p.element('#save-lead-btn')).isEnabled(),true);
+  assert.equal(await (await p.element('#f-nome')).getAttribute('value'),'Edição atômica QA');
+  assert.equal(await (await p.element('#f-notas')).getAttribute('value'),'Rascunho preservado QA');
+  assert.deepEqual(await crmState(p),before);assert.deepEqual(await crmWrites(p),writes);
+ }
+ await saveModal(p);const saved=await crmState(p);
+ assert.equal(saved.leads.qa1.nome,'Edição atômica QA');assert.equal(saved.leads.qa1.notas,'Rascunho preservado QA');
+ assert.equal(saved.leads.qa1.campoLegado,'Preservar QA');assert.equal(saved.leads.qa1.createdAt,123);
+ assert.deepEqual(saved.leads.qa2,before.leads.qa2);assert.equal(Object.keys(saved.activity).length,Object.keys(before.activity).length+1);
+ const updates=await p.driver.executeScript('return window.__qaAtomicUpdates');assert.equal(updates.length,batches+1);
+ const keys=Object.keys(updates.at(-1));
+ assert.deepEqual(keys.filter(k=>k.startsWith('leads/')),leadEditPaths('qa1'));
+ assert.equal(keys.filter(k=>k.startsWith('activity/')).length,1);assert.equal(keys.length,13);
 });
